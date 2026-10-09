@@ -50,3 +50,5 @@ pluggable is the next step toward game use. The engine has only run on gfx1100.
 
 Reference: `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/BODY_ENGINE_OPT.md` (performance history),
 `docs/RENDERER.md`, `docs/HFIELD_CONTACT.md`, port queue `kinestride/port_queue.tsv`. License notes: `NOTICE`.
+
+Status and next steps: board `~/Brain/kinestride/whiteboard.md` (symlink `.claude/checkpoints/whiteboard.md`, gitignored).
