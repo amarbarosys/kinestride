@@ -1502,7 +1502,10 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
         compare({'qfrc_constraint (ambiguous states)': (want['qfrc_constraint'].reshape(count, -1)[flip], got[i][flip])}, 1.0) if flip.any() else None
         want['qfrc_constraint'] = want['qfrc_constraint'].reshape(count, -1)[~flip]
         got[i] = got[i][~flip]
-    skip = STALE_RK4 if m.opt.integrator in (mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_IMPLICIT) else ()
+    # mj_Euler factors qH only when some dof has damping (and eulerdamp is on); otherwise it solves with qLD and qH stays 0
+    undamped = m.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER and (
+        not m.dof_damping.any() or m.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_EULERDAMP)
+    skip = STALE_RK4 if undamped or m.opt.integrator in (mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_IMPLICIT) else ()
     bad += [b for f, g in zip(fields, got) if f not in skip for b in compare({f: (want[f].reshape(len(g), -1), g)}, max(REL, fx * floor.get(f, 0)))]
     if bad:
         print(f'FAIL {len(bad)}/{len(fields)} {stage} fields: {" ".join(bad)}')
