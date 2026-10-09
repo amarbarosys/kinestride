@@ -2,7 +2,7 @@
 # rocprofv3 of the STAGE 6 step stopped after phase 5 (collision + constraints) and after phase 6 (Newton): device
 # time, VGPR, scratch, LDS, bytes fetched and written per launch. Newton = stop6 - stop5.
 # usage: NS="1024 65536" kinestride/bench.sh build MJCF 6; NS="1024 65536" kinestride/phases.sh build MJCF
-#        gpu-wait run --priority 90 --timeout 1800 -- kinestride/newton_prof.sh MJCF
+#        gpu-wait run --priority 90 --timeout 1800 -- probes/newton_prof.sh MJCF
 set -euo pipefail
 cd "$(dirname "$0")/.."
 X=.work/bench/$(basename "$1" .xml)-6; P=.work/newton-prof; fail=0

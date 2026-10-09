@@ -1,5 +1,5 @@
 # Compile probe: Mojo emits RDNA3 image_bvh_intersect_ray (gfx1100) via pop.call_llvm_intrinsic with a 3-wide vector.
-# Run: .venv/bin/mojo run kinestride/rt_bvh_probe.mojo | grep image_bvh_intersect_ray
+# Run: .venv/bin/mojo run probes/rt_bvh_probe.mojo | grep image_bvh_intersect_ray
 from std.sys import llvm_intrinsic
 from max.gpu.host.compile import _compile_code
 from max.gpu.host import get_gpu_target

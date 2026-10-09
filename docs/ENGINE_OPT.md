@@ -112,7 +112,7 @@ After it, Newton is still 46 of the 62 ms; the rest of the step is 15 ms.
 **Step 1.** 1a (warm start) needs chained steps and moves to step 3. 1b (hull climbing) is dropped:
 collision costs 0.8 ms. 1c (dead rows, Hessian only on a state change) was already in place.
 
-**Step 2 probe: wave per animal loses at large batches.** `kinestride/proto_factor.mojo` runs
+**Step 2 probe: wave per animal loses at large batches.** `probes/proto_factor.mojo` runs
 mj_factorI on the fly's 74-dof M (64 MuJoCo samples, every variant within 2.7e-06 of MuJoCo's qLD):
 
 | us per factorisation | 1,024 animals | 65,536 animals |

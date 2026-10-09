@@ -113,7 +113,7 @@ game_state.mojo, game_events.py, game_state_check.py  compact game state, CPU ev
 render.mojo  ray-march renderer on engine poses;  live.mojo, live.py  engine + renderer in one process
 stand.sh     live check + upright on ramp and bumps;  check.sh  parity gate per stage;  bench.sh  timing at 1k/16k/65k;  phases.sh  per-phase timing
 render_check.py, terrain_render_check.py, verify_render_leak.py   renderer gates
-rt_bvh_probe.mojo   compile probe: Mojo emits RDNA3 `image_bvh_intersect_ray` (gfx1100); `llvm_intrinsic` cannot pass the <3 x float> operands, so the vector is built with `llvm.insertelement` and the call is `pop.call_llvm_intrinsic`. Compile only: node layout and descriptor not yet run on the card
+../probes/rt_bvh_probe.mojo   compile probe: Mojo emits RDNA3 `image_bvh_intersect_ray` (gfx1100); `llvm_intrinsic` cannot pass the <3 x float> operands, so the vector is built with `llvm.insertelement` and the call is `pop.call_llvm_intrinsic`. Compile only: node layout and descriptor not yet run on the card
 spectate.mojo, spectate_check.py   live.mojo's spectator kernels on the card (`follow`: camera from the engine's own root pose rows; `hud`: bars, alpha 254) and their gate (hooks-off byte-equal, moving clip, HUD pixels, cost split, leak)
 follow_camera.mojo   standalone root-and-radius framing for landscape and portrait targets; `hud.mojo`   pure game-bar and world-source mini-map layout helpers; `spectator_check.py` checks both and includes an off-center-target mutant (builds under `kinestride/.work/spectator_check/`)
 models/      generated bodies (spider.py), eq_test.xml, eq_contact.xml, eq_mocap.xml (equality and mocap gate bodies), gravcomp_act.xml (gravcomp actuator-route gate body), tendon_spatial.xml (spatial tendon gate body), flight_export.py (Flybody flight MJCF, flight venv);  groom.py  grooming pairs
@@ -124,7 +124,7 @@ spider_brain.mojo, spider_gait.py, spider_link.py   spider brain<->body link: ga
 ../shiu_worker.mojo, ../shiu.py, ../verify_shiu_continuous.py   resident Shiu advance; deterministic split-run and reset-mutant gate
 spider_jump.py   spider jump: ctrl script, gate (models/spider.py `build(jump=True)`)
 eyes.mojo, spider_eyes.py   spider eyes (`live.mojo -DEYES=1`): per-animal eye cameras from the head pose, retinas [animal][eye][64x64] uint8, prey path from env.bin; eye table, analytic pinhole reference and gate (models/spider.py `build(prey=True)`)
-s0.mojo, proto_*.mojo   early prototypes
+../probes/s0.mojo, proto_*.mojo, newton_prof.sh   early prototypes, Newton rocprof probe
 ```
 
 ## Live view gotchas

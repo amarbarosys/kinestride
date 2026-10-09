@@ -454,7 +454,7 @@ def factorI(mi: TI, res: TO, f: Int, L: Int, LI_: Int, A: Int = MADR):
     """MuJoCo mj_factorI: sparse L'DL of rows L.. in place, backward over rows k: L(i, 0..i) -= L(i, 0..i) L(k, i) / L(k, k),
     then L(k, :) /= L(k, k); 1 / L(k, k) to rows LI_.. Pattern at A: rowadr, rownnz, colind (M's, or H's at HADR).
     WAVE: row k's updates (j, c), c <= j, are independent (a row's pattern is its chain, so row j's is a prefix of k's)
-    and spread over lanes (proto_factor.mojo, 10x at 1,024 animals)."""
+    and spread over lanes (probes/proto_factor.mojo, 10x at 1,024 animals)."""
     comptime if WAVE:
         sync()
         for k in range(NV - 1, -1, -1):
