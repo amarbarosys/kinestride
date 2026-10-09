@@ -30,6 +30,7 @@ iteration (`docs/ENGINE_OPT.md`, byte budget). Full implicit integration costs 8
 ## Running it
 
 ```
+tools/smoke.sh                     # CPU only, no assets: doc links + export + full-step build (29 s cold)
 tools/assets.sh                    # test bodies into .work/ (fly, flight model, spider; kept out of git)
 kinestride/check.sh step           # one stage vs MuJoCo (under gpu-wait on this machine)
 tools/check_all.sh                 # every stage, one preemptible gpu-wait job each
