@@ -155,6 +155,24 @@ per frame. Measured under `--shared` (a mojo-baro gate job on the card), before 
 (fly + spider on terrain, 960 x 540, K=10 physics + render): 78.2 -> 79.0 ms per frame. `render_check` stays
 IoU 0.9948 / 0.9981 / 0.9952 (alpha is the centre sample, unchanged by AA).
 
+## Window and live brain view (2026-10-09)
+
+The engine window and its panels come from imkit (`~/Projects/mojo/mojo-imkit`, package `imkit`: SDL3 window, FreeType
+atlas, an immediate-mode UI composed on the GPU); fly-connectome's `live.mojo -DGUI=1` draws the scene and the UI layer
+in one process. Kinestride itself adds one module for it:
+
+`kinestride/brain_view.mojo`: a brain as points (any dataset: `xyz.bin` float32 N x 3 unit-scaled, `class.bin` uint8,
+255 = not drawn), coloured by class, lit by an activity byte per neuron, through an orbit camera, into a
+`BRAIN_W x BRAIN_H` RGBA image (default 360 x 270). Two kernels: `splat` (one thread per neuron, additive RGB atomics;
+a lit neuron is a small cross) and `tone` (1 - exp, clears the accumulators). Capacity `BRAIN_N` (262,144).
+FlyWire, 138,639 neurons: 95.7 us per frame (upload + splat + tone). Check: `brain_view_test` (a lit group's pixels
+brighter than at rest, background unchanged; writes rest | lit | all-lit as PPM):
+
+    mojo build -I kinestride kinestride/brain_view_test.mojo -o .work/brain/bv_test
+    gpu-wait run --priority 90 --vram 1 --timeout 300 -- .work/brain/bv_test LAYOUT_DIR/ OUT.ppm
+
+The method for a new animal (layout export, the brain worker's activity tap, groups, checks): skill `brain-view`.
+
 ## Not in scope
 
 Textures and the fly's own compound-eye view. Walking needs S3 (actuators and adhesion); until then the renderer shows the passive
