@@ -1126,7 +1126,7 @@ def meshes(mjcf, out, grid=0, world=None):
     offset 3, box scale 3, bounding sphere centre 3 and radius 1, rgba 4), rv.bin int16 vertices quantised to the
     part's box then int16 unit vertex normals x 32767 (area-weighted face normals, mesh frame), rt.bin uint16 triangles local to the part, rp.bin uint8 part per triangle. Returns the decode error relative to part size.
     world: also draw the world body's box and ellipsoid geoms (walls, stones) and these extra world parts, a list of
-    (vertices (n, 3) world mm, faces (m, 3), rgba) (kinestride/assets.py); body 0 parts are drawn fixed (render.vertex)."""
+    (vertices (n, 3) world mm, faces (m, 3), rgba) (fly-connectome agent/body_engine/assets.py builds them with kinestride/assets.py); body 0 parts are drawn fixed (render.vertex)."""
     m, out = load(mjcf), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     ints, floats, verts, norms, tris, part, worst = [], [], [], [], [], [], 0.0
