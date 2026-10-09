@@ -141,6 +141,8 @@ def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, 
     var f = idx // NTRI
     var t = idx % NTRI
     var p = Int(rp[t])
+    if f > 0 and pi[5 * p] == 0:  # a world part (body 0) is the same for every animal: animal 0 draws it
+        return
     var c = camera(cam)
     var sx = SIMD[DType.float32, 4](0)
     var sy = SIMD[DType.float32, 4](0)
