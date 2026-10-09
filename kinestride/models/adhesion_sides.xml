@@ -1,0 +1,41 @@
+<mujoco model="adhesion_sides">
+  <!-- Adhesion transmission gate body (check.sh actuated, adhesion block): a free torso with two 2-link arms whose tip spheres
+       overlap at rest. Pair "ab": geom1 on arm a's tip, geom2 on arm b's tip. Adhesion "adh_a" acts on a's tip (geom1 side,
+       Codex review B5: the engine once walked geom2's body only), "adh_b" on b's tip (geom2 side); hinge servos move the arms.
+       adhesion_sides_c1.xml is the same body with the pair at condim 1 (one normal row, CONVEX=1). -->
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <default><geom contype="0" conaffinity="0" density="1000"/><joint damping="0.05" armature="0.001"/></default>
+  <worldbody>
+    <body name="torso" pos="0 0 0.3">
+      <freejoint/>
+      <geom type="box" size="0.06 0.04 0.02"/>
+      <body name="a1" pos="0.06 0.03 0">
+        <joint name="a1h" type="hinge" axis="0 0 1" range="-0.6 0.6"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 0" size="0.008"/>
+        <body name="a2" pos="0.08 0 0">
+          <joint name="a2h" type="hinge" axis="0 0 1"/>
+          <geom type="capsule" fromto="0 0 0 0.04 -0.02 0" size="0.007"/>
+          <geom name="ta" type="sphere" pos="0.04 -0.02 0" size="0.02"/>
+        </body>
+      </body>
+      <body name="b1" pos="0.06 -0.03 0">
+        <joint name="b1h" type="hinge" axis="0 0 1"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 0" size="0.008"/>
+        <body name="b2" pos="0.08 0 0">
+          <joint name="b2h" type="hinge" axis="0 0 1"/>
+          <geom type="capsule" fromto="0 0 0 0.04 0.02 0" size="0.007"/>
+          <geom name="tb" type="sphere" pos="0.04 0.02 0" size="0.02"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <pair name="ab" geom1="ta" geom2="tb" condim="3" friction="0.8 0.8"/>
+  </contact>
+  <actuator>
+    <position joint="a1h" kp="2" ctrlrange="-0.6 0.6"/>
+    <position joint="b1h" kp="2" ctrlrange="-0.6 0.6"/>
+    <adhesion name="adh_a" body="a2" gain="3" ctrlrange="0 1"/>
+    <adhesion name="adh_b" body="b2" gain="1" ctrlrange="0 1"/>
+  </actuator>
+</mujoco>

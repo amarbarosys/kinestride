@@ -1,0 +1,33 @@
+<mujoco model="gravcomp_act">
+  <!-- gravcomp test body (check.sh gravcomp): free torso whose compensation rides the ACTUATORS (actuatorgravcomp on its free joint,
+       engine_forward.c:770), leg A with actuatorgravcomp hinges, leg B on the passive route (hinge, ball), two joint servos so nu > 0
+       (with nu = 0 MuJoCo's mj_fwdActuation returns early and the actuator route is lost). No contacts. -->
+  <option timestep="0.002" gravity="0 0 -9.81" noslip_iterations="0"/>
+  <default><geom contype="0" conaffinity="0" density="1000"/><joint damping="0.05" armature="0.001"/></default>
+  <worldbody>
+    <body name="torso" pos="0 0 0.3" gravcomp="0.9">
+      <joint type="free" actuatorgravcomp="true"/>
+      <geom type="box" size="0.06 0.04 0.02"/>
+      <body name="a1" pos="0.06 0.04 0" gravcomp="0.7">
+        <joint name="ah" type="hinge" axis="0 1 0" actuatorgravcomp="true"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <body name="a2" pos="0.08 0 -0.05" gravcomp="1.0">
+          <joint name="ab" type="hinge" axis="1 0 0" actuatorgravcomp="true"/>
+          <geom type="capsule" fromto="0 0 0 0.05 0.02 -0.05" size="0.007"/>
+        </body>
+      </body>
+      <body name="b1" pos="0.06 -0.04 0" gravcomp="0.5">
+        <joint name="bx" type="hinge" axis="1 0 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <body name="b2" pos="0.08 0 -0.05" gravcomp="0.3">
+          <joint name="bz" type="ball"/>
+          <geom type="capsule" fromto="0 0 0 0.05 -0.02 -0.05" size="0.007"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="sa" joint="ah" kp="2"/>
+    <position name="sb" joint="bx" kp="2"/>
+  </actuator>
+</mujoco>

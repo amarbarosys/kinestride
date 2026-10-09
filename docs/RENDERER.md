@@ -1,0 +1,132 @@
+# Renderer for the body engine
+
+The body engine already holds every animal's pose on the GPU, so its renderer only has to draw: a Mojo
+compute rasteriser that reads the poses in place, writes one 64-bit visibility buffer and shades it into
+the frame a viewer shows. The fly is 69 mesh parts, 115,158 triangles and 54,905 vertices; sixty-four
+flies are 7.4 million triangles a frame. The design keeps the model data under 1 MB on the card for any
+number of flies, allocates nothing per frame, and copies no pose: the bytes per frame are the
+visibility buffer and the finished image.
+
+## Status
+
+Steps 1 to 5 PASS (`0ad21a9`, `905d2bc`, `86fb4d2`): mesh tables (1.1 MB), 64-bit atomic min (10M writes
+0.54 ms), raster and shade, mpv/ffmpeg streaming, silhouette IoU against mujoco.Renderer 0.995-0.998 in
+three views from the engine's own pose, 10,000-frame leak gate (fds 7/7, VRAM flat). One fly at 960 x 540:
+0.57-1.0 ms per frame including the copy to host. VRAM: 152 MB with the MAX pool off (it was 22.7 GB
+with MAX's default pool). Steps 6 (cull, LOD) and 7 (tune) open.
+
+Spectator follow-camera unit 1 is implemented in `kinestride/follow_camera.mojo`. `spectator_check.py`
+checks a merged two-root camera in landscape and portrait, and confirms that a one-unit target offset fails.
+The checked sphere bound must fit within the narrower horizontal or vertical half-angle, with 5% distance
+margin. This gate validates sphere framing math and target centering only; it does not yet exercise recorded
+moving engine poses or the renderer integration hook. Camera input bytes are caller-owned root xyz triples plus
+one radius per root; camera output is seven float32 values in the existing eye/target/fovy order.
+
+Spectator HUD unit 2 is implemented in `kinestride/hud.mojo`. It takes game-bar values as normalized
+scalars and source descriptor XY/kind, and returns pixel fill extents and mini-map marker positions. It does not
+own text rendering or resource-state transitions. The standalone fixture checks energy/health/stamina fills of
+90/30/60 px and a decoy marker at the independently expected pixel coordinate and kind.
+
+## Data flow
+
+```
+model.py export (once)                       engine step (GPU, every physics step)
+  meshes: int16 vertices per part, uint16      xpos, xquat per body  ──┐  read in place, no copy
+  triangles, part -> body + local pose ───┐                            │
+                                          ▼                            ▼
+                 cull pass: part bounding sphere vs frustum, one thread per (fly, part)
+                                          │ visible (fly, part) list + LOD level
+                                          ▼
+                 raster pass: one thread per triangle, 64-bit atomicMin
+                 into the visibility buffer = depth 32 | fly 12 | triangle 20
+                                          ▼
+                 shade pass: one thread per pixel, ids -> normal, part colour, Lambert + floor
+                                          ▼
+                 RGBA8 into a pinned host ring (2 frames) ──▶ mpv (live) or ffmpeg (mp4), one pipe
+```
+
+## Memory budget
+
+| what | layout | bytes | grows with |
+|---|---|---:|---|
+| vertices | int16 x 3, quantised to each part's bounding box (scale + offset per part) | 330 KB | nothing |
+| triangles | uint16 x 3 per triangle, local to the part (largest part: 1,002 vertices) | 690 KB | nothing |
+| part table | body id, local pose (3 + 4), quantisation (6), bounding sphere (4), colour (1) | 6 KB | nothing |
+| LOD meshes (step 6) | the same format at 10k and 1k triangles | ~110 KB | nothing |
+| poses | the engine's own xpos / xquat rows | 0 extra | animals, already paid |
+| visibility buffer | uint64 per pixel, 1920 x 1080 | 16.6 MB | pixels |
+| image | RGBA8 per pixel, device | 8.3 MB | pixels |
+| host ring | 2 pinned RGBA8 frames, reused | 16.6 MB | pixels |
+
+All mesh data is stored once and every fly draws from it; a fly costs no renderer memory beyond the
+pose the engine already keeps. int16 vertices over a part's box (at most 2.4 mm) resolve 0.04 um, far
+finer than a pixel; uint16 triangles halve the index bytes. The visibility buffer stores ids, not
+colours, so the raster pass writes 8 bytes per covered pixel and shading runs once per pixel instead
+of once per overlapping triangle.
+
+## No leak, by construction
+
+- Every device buffer, the pinned ring and the output pipe are created once, before the first frame,
+  sized by the resolution and the model; a frame allocates nothing on host or device.
+- One process owns the pipe; the viewer reads the other end, and the renderer exits on EOF or a broken
+  pipe. No `input()`: the stdin fd leak of 2026-10-03 (`1a07a08`) is the scar.
+- Gate (`kinestride/verify_render_leak.py`, like `verify_worker_fds.py`): render 10,000 frames,
+  sample host RSS, open fds and the process's VRAM (sysfs) at frames 100 and 10,000. They must be equal.
+
+## Performance targets (1920 x 1080, Ultimate-AI)
+
+| scene | target per frame | why |
+|---|---:|---|
+| 1 fly, close-up | under 0.5 ms | 115k triangles, most a few pixels |
+| 64 flies, grid | under 2 ms | 7.4M triangles before culling and LOD |
+| 4,096 flies, wide | under 4 ms | only possible with LOD: a fly 10 px tall gets the 1k mesh |
+
+At 60 frames per second the renderer gets one frame every 167 physics steps at dt 0.1 ms, so these
+costs stay under 2% of a 65,536-animal step loop.
+
+Spectator live hook (lane-live unit 1): `live.mojo -DFOLLOW=1 -DHUD=1 -DPROFILE=1` with `spectate.mojo`. `follow` runs on the card
+after the K-step launch and writes the camera eye and target from the engine's own root xpos rows (no pose copied to the host) with
+`follow_camera.fit_distance`, the formula the host `fit_camera` uses. `hud` draws the three bars of animal 0 over the shaded image
+from four float32 rows (energy, health, stamina, dead; `smooth.mojo` OGAME layout once the game hook is on); HUD pixels carry alpha
+254, alpha 255 stays "animal" for the stand and framing gates. Flags off compile none of it: the frame of the starting state is
+byte-equal to the pre-hook `live.mojo` (5faa668). Gate `check.sh spectate` (`spectate_check.py`): hooks off byte-equal; 300-frame clip of
+the merged spider walker (`BRAIN=2`, 640 x 360, K=10) framed without clipping and centred in all 300 frames, root travel 6.5 mm;
+HUD bar fills 90/30/60 px of 120 for 0.75/0.25/0.5 and grey when dead; frame cost split and leak (fds 8/8, VRAM 147,792 to 145,744 KiB,
+RSS +64 KiB over frames 100 and 10,000) in `spectator_integration_check.py`. Mutants: camera target +30 mm, HUD fill one pixel
+short, follow compiled in by default. Frame cost (ms, one spider, 640 x 360, K=10, phases synced, so a measurement of the split,
+not of fps): physics 40.51, neural_control 0.147, render 0.797, copy 0.149, display 0.277 (run co-running under `--shared`; an exclusive run read physics 37.22, render 0.274); physics is 97 to 99 % of a frame. Animals are
+bodies in a shared physical scene (one rendered). Bug fixed on the way: `fit_camera` mixed radians and degrees and framed the
+animal about 100 x too far (its fixture repeated the mix); the fixture and a short-distance mutant now catch it.
+
+## Steps
+
+```
+1 export ──▶ 2 probe ──▶ 3 raster + shade ──▶ 4 display + leak gate ──▶ 5 check vs MuJoCo ──▶ 6 cull + LOD ──▶ 7 tune
+```
+
+1. **Export (S).** model.py writes the mesh tables above for any MJCF; the export refuses meshes over
+   65,535 vertices per part. Check: vertices decoded on the CPU are within 1e-4 of the part size of
+   MuJoCo's mesh_vert in the geom frame.
+2. **Probe the one risky primitive (S).** A 64-bit atomicMin on global memory from Mojo on gfx1100,
+   timed on a synthetic 10M-triangle load. If Mojo does not expose it, fall back to 32-bit depth
+   atomicMin plus a second pass that writes ids where depth matches.
+3. **Raster and shade (M).** Vertices transformed by the engine's pose of the part's body times the
+   part's local pose; edge-function raster with a bounding-box loop for small triangles; a separate
+   tile path for triangles over 32 x 32 pixels so one large triangle cannot hold a wave. Shading:
+   flat normal from the triangle, part colour from the MJCF material, one directional light, a floor.
+4. **Display and leak gate (S).** Pinned ring, `mpv` for a live window, `ffmpeg` for mp4;
+   verify_render_leak.py as above.
+5. **Check against MuJoCo (S).** The same pose rendered by `mujoco.Renderer` and by ours, same camera:
+   silhouette IoU at least 0.98 per view (3 views). Then the images are opened and looked at.
+6. **Cull and LOD (M).** Per (fly, part) frustum test; LOD by projected size; decimated meshes made
+   once at export. Check: the 64-fly frame unchanged in IoU, time down.
+7. **Tune (S per knob).** Threads per block, raster bin size, vertex fetch as packed int16 x 4.
+   rocprof-kernels before and after: VGPRs, scratch, device time per pass.
+
+Every step reports ms per frame (median of 1,000 frames after a 1 s warm-up), bytes allocated, VRAM
+and RSS, with the LACT profile named.
+
+## Not in scope
+
+Textures, shadows, anti-aliasing and the fly's own compound-eye view. Walking needs S3 (actuators and adhesion); until then the renderer shows the passive
+body, which is still a useful look at contacts.

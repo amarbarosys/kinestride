@@ -1,0 +1,6 @@
+Kinestride
+Portions of this software are translated from MuJoCo (https://github.com/google-deepmind/mujoco),
+Copyright DeepMind Technologies Limited, licensed under the Apache License, Version 2.0.
+The translated functions are named after their MuJoCo originals and cite the source lines they follow.
+Test bodies are not distributed with this repository (tools/assets.sh); the fly models derive from
+flybody (TuragaLab) and NeuroMechFly, both Apache-2.0.

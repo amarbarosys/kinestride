@@ -1,0 +1,42 @@
+<mujoco model="eq_mocap">
+  <!-- mocap test body: free torso with two legs; leg A tip is welded to a mocap body (pose from mocap_pos/quat) and leg B
+       tip is connected to a second mocap body, so the mocap pose drives the legs through equality rows (check.sh mocap). -->
+  <option timestep="0.002" gravity="0 0 -9.81" noslip_iterations="0"/>
+  <default><geom contype="0" conaffinity="0" density="1000"/><joint damping="0.05" armature="0.001"/></default>
+  <worldbody>
+    <body name="m1" mocap="true" pos="0.19 0.06 0.2" quat="0.9238795 0 0.3826834 0"><geom type="sphere" size="0.01" mass="0"/></body>
+    <body name="m2" mocap="true" pos="0.19 -0.06 0.2"><geom type="sphere" size="0.01" mass="0"/></body>
+    <body name="torso" pos="0 0 0.3">
+      <freejoint/>
+      <geom type="box" size="0.06 0.04 0.02"/>
+      <body name="a1" pos="0.06 0.04 0">
+        <joint name="ah" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <body name="a2" pos="0.08 0 -0.05">
+          <joint name="ab" type="ball" damping="0.02"/>
+          <geom type="capsule" fromto="0 0 0 0.05 0.02 -0.05" size="0.007"/>
+          <body name="a3" pos="0.05 0.02 -0.05">
+            <joint name="as" type="slide" axis="1 0 0"/>
+            <geom type="box" size="0.01 0.01 0.01"/>
+          </body>
+        </body>
+      </body>
+      <body name="b1" pos="0.06 -0.04 0">
+        <joint name="bx" type="hinge" axis="1 0 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <body name="b2" pos="0.08 0 -0.05">
+          <joint name="bz" type="hinge" axis="0 0 1"/>
+          <geom type="capsule" fromto="0 0 0 0.05 -0.02 -0.05" size="0.007"/>
+          <body name="b3" pos="0.05 -0.02 -0.05">
+            <joint name="by" type="hinge" axis="0 1 0"/>
+            <geom type="box" size="0.01 0.01 0.01"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <equality>
+    <weld name="wa" body1="a3" body2="m1" torquescale="1.5"/>
+    <connect name="cb" body1="b3" body2="m2" anchor="0.01 0 0"/>
+  </equality>
+</mujoco>

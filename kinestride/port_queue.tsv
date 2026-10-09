@@ -1,0 +1,5 @@
+# name	function	file	stage	status	note
+hfield-cone	mj_instantiateContact	engine_core_constraint.c	cone_hfield	done 0c0817c	elliptic cone on exact-heightfield pairs: export refusal + gate (contact tail shared)
+tendon-limits	mj_instantiateLimit	engine_core_constraint.c	tendon_limit	done 6273a01	tendon limits (rows on the equality block); tendon equalities and friction loss stay refused
+flight-contacts	mj_collideGeoms	engine_collision_driver.c	flight_contacts	done cdc3b60	automatic pairs + sphere/capsule/ellipsoid/cylinder narrowphase + condim 1 for the flight model; EPA multicontact stays unported
+sleep	mj_sleep	engine_sleep.c	sleep	done 9990fd0	sleep filter per animal (one tree = one island); throughput only, zero gain while every animal walks

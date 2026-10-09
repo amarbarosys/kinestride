@@ -1,0 +1,56 @@
+<mujoco model="tendon_spatial">
+  <!-- spatial tendon gate body (check.sh spatial_tendon): free torso, two 2-link legs (hinge/hinge), a tail; tendons: straight
+       site-site, a pulley split, sphere wrap with sidesite, cylinder wrap, a sphere wrap with the sidesite INSIDE the sphere (wrap_inside),
+       one fixed tendon (mixed models) and a tendon servo. -->
+  <option timestep="0.002" gravity="0 0 -9.81" noslip_iterations="0"/>
+  <default><geom contype="0" conaffinity="0" density="1000"/><joint damping="0.05" armature="0.001"/></default>
+  <worldbody>
+    <body name="torso" pos="0 0 0.3">
+      <freejoint/>
+      <geom type="box" size="0.06 0.04 0.02"/>
+      <site name="t0" pos="0.05 0.03 0.02"/>
+      <site name="t1" pos="-0.05 -0.03 0.02"/>
+      <body name="a1" pos="0.06 0.04 0">
+        <joint name="ah" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <site name="a1s" pos="0.04 0 -0.02"/>
+        <site name="side_in" pos="0.052 0.015 -0.027"/>
+        <geom name="ball" type="sphere" size="0.02" pos="0.05 0.015 -0.03"/>
+        <body name="a2" pos="0.08 0 -0.05">
+          <joint name="ab" type="hinge" axis="1 0 0"/>
+          <geom type="capsule" fromto="0 0 0 0.05 0.02 -0.05" size="0.007"/>
+          <site name="a2s" pos="0.03 0.01 -0.03"/>
+        </body>
+      </body>
+      <body name="b1" pos="0.06 -0.04 0">
+        <joint name="bx" type="hinge" axis="1 0 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <site name="b1s" pos="0.04 0 -0.02"/>
+        <geom name="cyl" type="cylinder" size="0.015 0.03" pos="0 0 -0.03" euler="90 0 0"/>
+        <body name="b2" pos="0.08 0 -0.05">
+          <joint name="bz" type="hinge" axis="0 0 1"/>
+          <geom type="capsule" fromto="0 0 0 0.05 -0.02 -0.05" size="0.007"/>
+          <site name="b2s" pos="0.03 -0.01 -0.03"/>
+        </body>
+      </body>
+      <body name="c1" pos="-0.06 0 0">
+        <joint name="ch" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 -0.06 0 0" size="0.008"/>
+        <site name="c1s" pos="-0.03 0 0.01"/>
+      </body>
+      <site name="side_a" pos="0.04 0.02 0.07"/>
+      <site name="side_b" pos="0.06 -0.02 0.07"/>
+    </body>
+  </worldbody>
+  <tendon>
+    <spatial name="straight" stiffness="30" damping="0.2"><site site="t0"/><site site="a2s"/></spatial>
+    <spatial name="split" stiffness="20" damping="0.1"><site site="c1s"/><site site="t1"/><pulley divisor="2"/><site site="t1"/><site site="b2s"/><pulley divisor="2"/><site site="t1"/><site site="a1s"/></spatial>
+    <spatial name="sph" stiffness="40" damping="0.2" width="0.002"><site site="t0"/><geom geom="ball" sidesite="side_a"/><site site="a2s"/></spatial>
+    <spatial name="cylw" stiffness="40" damping="0.2"><site site="t1"/><geom geom="cyl" sidesite="side_b"/><site site="b2s"/></spatial>
+    <spatial name="sph_in" stiffness="40" damping="0.2"><site site="t1"/><geom geom="ball" sidesite="side_in"/><site site="a2s"/></spatial>
+    <fixed name="fx" stiffness="10" damping="0.1"><joint joint="ah" coef="1"/><joint joint="bx" coef="-0.5"/></fixed>
+  </tendon>
+  <actuator>
+    <general name="tsrv" tendon="straight" gainprm="3" biasprm="0 -3 0"/>
+  </actuator>
+</mujoco>

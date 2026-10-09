@@ -1,0 +1,13 @@
+[project]
+name = "kinestride"
+version = "0.1.0"
+description = "Batched GPU physics for articulated bodies in Mojo (AMD), stage-checked against MuJoCo"
+requires-python = ">=3.12"
+dependencies = ["mojo==1.1.0", "max==26.6.0", "mujoco==3.9.0", "numpy==2.5.3", "pillow>=12"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["kinestride", "kinestride.models"]

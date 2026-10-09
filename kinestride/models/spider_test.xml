@@ -1,0 +1,107 @@
+<mujoco model="spider-test">
+  <default><joint damping="0.02" stiffness="0.3"/></default>  <!-- exercise passive springs, dampers and implicit Euler -->
+  <worldbody>
+    <geom type="plane" size="10 10 .1"/>
+    <body name="cephalothorax" pos="0 0 2">
+      <joint type="free"/>
+      <geom type="ellipsoid" size="1.2 1 0.6" mass="0.5"/>
+      <body name="abdomen" pos="-1.8 0 0.2"><joint type="ball"/><geom type="ellipsoid" size="1.4 1.1 1" mass="0.8"/></body>
+      <body name="leg0" pos="1.109 0.459 0" euler="0 0 22.5">
+        <joint name="hip0" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee0" pos="1.5 0 0.8">
+          <joint name="knee0" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip0" pos="1.2 0 -1.6">
+            <joint name="tele0" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg1" pos="0.459 1.109 0" euler="0 0 67.5">
+        <joint name="hip1" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee1" pos="1.5 0 0.8">
+          <joint name="knee1" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip1" pos="1.2 0 -1.6">
+            <joint name="tele1" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg2" pos="-0.459 1.109 0" euler="0 0 112.5">
+        <joint name="hip2" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee2" pos="1.5 0 0.8">
+          <joint name="knee2" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip2" pos="1.2 0 -1.6">
+            <joint name="tele2" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg3" pos="-1.109 0.459 0" euler="0 0 157.5">
+        <joint name="hip3" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee3" pos="1.5 0 0.8">
+          <joint name="knee3" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip3" pos="1.2 0 -1.6">
+            <joint name="tele3" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg4" pos="-1.109 -0.459 0" euler="0 0 202.5">
+        <joint name="hip4" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee4" pos="1.5 0 0.8">
+          <joint name="knee4" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip4" pos="1.2 0 -1.6">
+            <joint name="tele4" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg5" pos="-0.459 -1.109 0" euler="0 0 247.5">
+        <joint name="hip5" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee5" pos="1.5 0 0.8">
+          <joint name="knee5" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip5" pos="1.2 0 -1.6">
+            <joint name="tele5" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg6" pos="0.459 -1.109 0" euler="0 0 292.5">
+        <joint name="hip6" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee6" pos="1.5 0 0.8">
+          <joint name="knee6" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip6" pos="1.2 0 -1.6">
+            <joint name="tele6" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+      <body name="leg7" pos="1.109 -0.459 0" euler="0 0 337.5">
+        <joint name="hip7" type="ball"/>
+        <geom type="capsule" fromto="0 0 0 1.5 0 0.8" size="0.08" mass="0.02"/>
+        <body name="knee7" pos="1.5 0 0.8">
+          <joint name="knee7" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="capsule" fromto="0 0 0 1.2 0 -1.6" size="0.06" mass="0.015"/>
+          <body name="tip7" pos="1.2 0 -1.6">
+            <joint name="tele7" type="slide" axis="1 0 0" range="-0.2 0.2"/>
+            <geom type="sphere" size="0.05" mass="0.005"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

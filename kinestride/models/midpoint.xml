@@ -1,0 +1,26 @@
+<mujoco model="midpoint">
+  <!-- four standalone free bodies, one per mj_midpoint path (engine_forward.c:1708): simple (ipos 0, iquat identity: MuJoCo's dof_simplenum),
+       aligned (ipos 0, rotated principal axes), coupled (ipos offset, diagonal), coupled and rotated. No contacts: check.sh midpoint -->
+  <option timestep="1e-3" integrator="implicitfast"/>
+  <worldbody>
+    <body name="simple" pos="0 0 0.5">
+      <freejoint/>
+      <geom type="box" size=".05 .03 .02" mass="0.3" contype="0" conaffinity="0"/>
+    </body>
+    <body name="aligned" pos="0.3 0 0.5">
+      <freejoint/>
+      <inertial pos="0 0 0" mass="0.3" fullinertia="2e-3 2.5e-3 3e-3 3e-4 2e-4 1e-4"/>
+      <geom type="box" size=".05 .03 .02" mass="0.3" contype="0" conaffinity="0"/>
+    </body>
+    <body name="coupled" pos="0.6 0 0.5">
+      <freejoint/>
+      <inertial pos="0.01 0.02 -0.01" mass="0.3" diaginertia="2e-3 2.5e-3 3e-3"/>
+      <geom type="box" size=".05 .03 .02" mass="0.3" contype="0" conaffinity="0"/>
+    </body>
+    <body name="coupledrot" pos="0.9 0 0.5">
+      <freejoint/>
+      <inertial pos="0.01 0.02 -0.01" mass="0.3" fullinertia="2e-3 2.5e-3 3e-3 3e-4 2e-4 1e-4"/>
+      <geom type="box" size=".05 .03 .02" mass="0.3" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+</mujoco>

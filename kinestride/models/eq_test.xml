@@ -1,0 +1,58 @@
+<mujoco model="eq_test">
+  <!-- equality-constraint test body: free torso, two 3-link legs (hinge/ball/slide and hinge/hinge/hinge), a
+       connect and a weld that close loops across the legs (body and site semantics), a joint coupling (cubic)
+       and a one-joint pin, and a weld/connect to the world. No contacts. -->
+  <option timestep="0.002" gravity="0 0 -9.81" noslip_iterations="0"/>
+  <default><geom contype="0" conaffinity="0" density="1000"/><joint damping="0.05" armature="0.001"/></default>
+  <worldbody>
+    <body name="torso" pos="0 0 0.3">
+      <freejoint/>
+      <geom type="box" size="0.06 0.04 0.02"/>
+      <site name="ts" pos="0.03 0.02 0"/>
+      <body name="a1" pos="0.06 0.04 0">
+        <joint name="ah" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <body name="a2" pos="0.08 0 -0.05">
+          <joint name="ab" type="ball" damping="0.02"/>
+          <geom type="capsule" fromto="0 0 0 0.05 0.02 -0.05" size="0.007"/>
+          <body name="a3" pos="0.05 0.02 -0.05">
+            <joint name="as" type="slide" axis="1 0 0"/>
+            <geom type="box" size="0.01 0.01 0.01"/>
+            <site name="a3s" pos="0.01 0 0.005" quat="0.9238795 0 0.3826834 0"/>
+          </body>
+        </body>
+      </body>
+      <body name="b1" pos="0.06 -0.04 0">
+        <joint name="bx" type="hinge" axis="1 0 0"/>
+        <geom type="capsule" fromto="0 0 0 0.08 0 -0.05" size="0.008"/>
+        <body name="b2" pos="0.08 0 -0.05">
+          <joint name="bz" type="hinge" axis="0 0 1"/>
+          <geom type="capsule" fromto="0 0 0 0.05 -0.02 -0.05" size="0.007"/>
+          <body name="b3" pos="0.05 -0.02 -0.05">
+            <joint name="by" type="hinge" axis="0 1 0"/>
+            <geom type="box" size="0.01 0.01 0.01"/>
+            <site name="b3s" pos="0.01 0 0.005" quat="0.9238795 0.3826834 0 0"/>
+          </body>
+        </body>
+      </body>
+      <body name="c1" pos="-0.06 0 0">
+        <joint name="ch" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 -0.06 0 0" size="0.008"/>
+        <body name="c2" pos="-0.06 0 0">
+          <joint name="cs" type="hinge" axis="1 0 0"/>
+          <geom type="box" size="0.01 0.01 0.01"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <equality>
+    <connect name="loop" body1="a3" body2="b3" anchor="0.01 0 0"/>
+    <connect name="loop_site" site1="a3s" site2="b3s"/>
+    <weld name="legs" body1="a2" body2="b2" relpose="0.1 0.2 0.3 0.7071068 0.7071068 0 0" torquescale="2"/>
+    <weld name="legs_site" site1="a3s" site2="b3s" torquescale="0.5"/>
+    <joint name="couple" joint1="ah" joint2="bx" polycoef="0.1 0.7 0.2 -0.1 0.05"/>
+    <joint name="pin" joint1="ch" polycoef="0.3 0 0 0 0"/>
+    <connect name="tw" body1="c2" anchor="0.02 0 0.01"/>
+    <weld name="tww" body1="c1" torquescale="1.5"/>
+  </equality>
+</mujoco>

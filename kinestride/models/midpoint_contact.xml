@@ -1,0 +1,30 @@
+<mujoco model="midpoint_contact">
+  <!-- three standalone free bodies: p and q each carry a sphere-sphere contact pair with a static sphere (p coupled and rotated inertia, q aligned and rotated;
+       a pair across two free bodies would span two floating origins, which the export refuses), r is alone (aligned); a body with a live contact must NOT
+       take mj_midpoint (midpoint_eligible), r always does. check.sh implicit, states from midpoint_states.py -->
+  <option timestep="1e-3" integrator="implicitfast"/>
+  <default><geom contype="0" conaffinity="0"/></default>
+  <worldbody>
+    <geom name="w1" type="sphere" size="0.05" pos="0 0 0.5"/>
+    <geom name="w2" type="sphere" size="0.05" pos="0.3 0 0.5"/>
+    <body name="p" pos="0 0 0.5">
+      <freejoint/>
+      <inertial pos="0.01 0.02 -0.01" mass="0.3" fullinertia="2e-3 2.5e-3 3e-3 3e-4 2e-4 1e-4"/>
+      <geom name="sa" type="sphere" size="0.05"/>
+    </body>
+    <body name="q" pos="0.3 0 0.5">
+      <freejoint/>
+      <inertial pos="0 0 0" mass="0.2" fullinertia="1e-3 1.4e-3 1.8e-3 2e-4 1e-4 1.5e-4"/>
+      <geom name="sb" type="sphere" size="0.05"/>
+    </body>
+    <body name="r" pos="2 0 0.5">
+      <freejoint/>
+      <inertial pos="0 0 0" mass="0.25" fullinertia="2e-3 2.2e-3 2.6e-3 1.5e-4 1e-4 2e-4"/>
+      <geom name="sc" type="sphere" size="0.05"/>
+    </body>
+  </worldbody>
+  <contact>
+    <pair name="p1" geom1="w1" geom2="sa" condim="3" friction="0.8 0.8 0.005 0.0001 0.0001" margin="0.01" solref="0.02 1" solimp="0.9 0.95 0.001 0.5 2"/>
+    <pair name="q2" geom1="w2" geom2="sb" condim="3" friction="0.8 0.8 0.005 0.0001 0.0001" margin="0.01" solref="0.02 1" solimp="0.9 0.95 0.001 0.5 2"/>
+  </contact>
+</mujoco>
