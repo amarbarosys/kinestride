@@ -8,7 +8,7 @@ Per frame, five passes and no allocation:
   suncam  one thread: the sun's camera (near-orthographic, over the view target) from the view camera
   clear   visibility buffer and shadow map = all ones
   raster  one thread per (animal, triangle): world vertices from body pose x part pose, perspective, edge
-          functions over the triangle's pixel box, 64-bit atomic min of (depth bits << 32 | animal << 17 | tri);
+          functions over the triangle's pixel box, 64-bit atomic min of (depth bits << 32 | animal << TB | tri);
           run twice, from the view camera into vis and (SHADOW=2) from the sun into the shadow map sm
   shade   one thread per pixel, in linear light (gamma 2): smooth normal and colour (vertex normals and texture-baked
           vertex colours from rv.bin, barycentric),
@@ -44,6 +44,18 @@ comptime NPART = get_defined_int["NPART"]()
 comptime NRV = get_defined_int["NRV"]()
 comptime NRT = get_defined_int["NRT"]()  # triangle indices (3 per triangle)
 comptime NTRI = NRT // 3
+
+
+def _bits(n: Int) -> Int:
+    var b = 1
+    while (1 << b) < n:
+        b += 1
+    return b
+
+
+comptime TB = _bits(NTRI)  # key = depth bits << 32 | animal << TB | triangle: the triangle field sized to the model
+comptime TB64 = UInt64(TB)
+comptime TMASK = UInt64((1 << TB) - 1)
 comptime PFS = 21  # part floats: pos 3, quat 4, box offset 3, box scale 3, sphere centre 3, radius 1, rgba 4
 comptime GX = get_defined_int["GX", 1]()
 comptime BOX = Float32(get_defined_int["BOX_MM", 0]())  # > 0: the camera is inside a closed cube of this side (model.cube)  # grid columns when spacing > 0
@@ -65,7 +77,13 @@ comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the 
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
 comptime AA = get_defined_int["AA", 1]()  # 1: silhouette pixels average 4 analytic sub-rays
-comptime NSM = W * H if SHADOW == 2 else 1  # shadow map texels (the map has the view's size: raster is compiled for W x H)
+comptime GLASS = get_defined_int["GLASS", 1]()  # 1: see-through parts (alpha < 1: wings) in their own layer, blended over the scene
+comptime REFLECT = get_defined_int["REFLECT", 1]() if TERRAIN == 0 and get_defined_int["BOX_MM", 0]() == 0 else 0  # flat floor mirror
+comptime REFL = Float32(0.2)  # floor reflectance (MuJoCo's grid material)
+comptime OGL = W * H if SHADOW == 2 else 0  # aux layers in sm, each W x H (raster is compiled for W x H): shadow map at 0,
+comptime OMR = OGL + (W * H if GLASS else 0)  # then the glass layer at OGL, the mirror layer at OMR
+comptime NAUX = OMR + (W * H if REFLECT else 0)
+comptime NSM = NAUX if NAUX > 0 else 1  # sm buffer size (uint64), what callers allocate
 comptime BLOB = Float32(get_defined_int["BLOB_UM", 1200]()) * 1e-3  # SHADOW=1 blob radius, mm
 comptime TVIS = TileTensor[DType.uint64, type_of(LVIS), MutAnyOrigin]
 comptime TIMG = TileTensor[DType.uint32, type_of(LVIS), MutAnyOrigin]
@@ -136,7 +154,8 @@ def clear(vis: TVIS):
         vis[i] = EMPTY
 
 
-def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM):
+def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, base: Int32, mode: Int32):
+    """Into vis at offset base: mode 0 the opaque parts, 1 the see-through parts (alpha < 1) only, 2 the opaque parts mirrored in z = 0."""
     var idx = Int(block_idx.x * block_dim.x + thread_idx.x)
     if idx >= F * NTRI:
         return
@@ -145,12 +164,17 @@ def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, 
     var p = Int(rp[t])
     if f > 0 and pi[5 * p] == 0:  # a world part (body 0) is the same for every animal: animal 0 draws it
         return
+    if (pf[PFS * p + 20] < 0.999) != (mode == 1):
+        return
     var c = camera(cam)
     var sx = SIMD[DType.float32, 4](0)
     var sy = SIMD[DType.float32, 4](0)
     var sz = SIMD[DType.float32, 4](0)
     for k in range(3):
-        var d = vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + k) - c[0]
+        var w = vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + k)
+        if mode == 2:
+            w[2] = -w[2]
+        var d = w - c[0]
         var z = dot(d, c[3])
         if z < NEAR:
             return
@@ -164,7 +188,7 @@ def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, 
     var x1 = min(Int(max(sx[0], max(sx[1], sx[2]))) + 1, W - 1)
     var y0 = max(Int(min(sy[0], min(sy[1], sy[2]))), 0)
     var y1 = min(Int(max(sy[0], max(sy[1], sy[2]))) + 1, H - 1)
-    var id = UInt64(f << 17 | t)
+    var id = UInt64(f << TB | t)
     for y in range(y0, y1 + 1):
         var py = Float32(y) + 0.5
         for x in range(x0, x1 + 1):
@@ -176,7 +200,7 @@ def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, 
                 continue
             var depth = 1 / (w0 * sz[0] + w1 * sz[1] + w2 * sz[2])
             var key = UInt64(depth.to_bits()) << 32 | id
-            _ = Atomic.min[ordering=Ordering.RELAXED](vis.ptr.unsafe_offset(y * W + x), key)
+            _ = Atomic.min[ordering=Ordering.RELAXED](vis.ptr.unsafe_offset(Int(base) + y * W + x), key)
 
 
 @always_inline
@@ -445,41 +469,51 @@ def sky(view: V3) -> V3:
 
 
 @always_inline
-def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
-           key: UInt64, tt: Float32, ao: Float32) -> V3:
-    """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
-    else the ground or box, else the sky. Distance fog (ground only) toward the horizon colour."""
-    var g = ground_hit(cam, eye, ray)
-    var view = unit(ray)
-    var fogc = V3(0.36, 0.4225, 0.5184, 0)  # horizon colour, linear
-    if key != EMPTY and tt < g[0]:
-        var f = Int((key >> 17) & 0x7FFF)
-        var t = Int(key & 0x1FFFF)
-        var p = Int(rp[t])
-        var base = 3 * t
-        var a = vertex(pi, pf, rv, rt, pose, cam, f, p, base)
-        var b = vertex(pi, pf, rv, rt, pose, cam, f, p, base + 1)
-        var c = vertex(pi, pf, rv, rt, pose, cam, f, p, base + 2)
-        var h = tri_hit(eye, ray, a, b, c)
-        var n = unit(cross(b - a, c - a))
-        if h[0] < 3.4e38:  # smooth normal, unless it disagrees with the face (two-sided thin parts: wing normals cancel)
-            var ns = unit(vnormal(pi, pf, rv, rt, pose, f, p, base) * (1 - h[1] - h[2]) + vnormal(pi, pf, rv, rt, pose, f, p, base + 1) * h[1]
-                          + vnormal(pi, pf, rv, rt, pose, f, p, base + 2) * h[2])
-            if dot(ns, n) > 0.5:
-                n = ns
-        if dot(n, ray) > 0:
-            n = -n
+def animal(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
+           key: UInt64, tt: Float32, ao: Float32, mirror: Bool) -> V3:
+    """Linear colour of animal triangle `key` along ray (at ray parameter tt): smooth normal and vertex colour, sun with its
+    shadow, sky/ground ambient x ao, highlight. mirror: the triangle reflected in z = 0, lit as the real one, no shadow."""
+    var f = Int(key >> TB64) & ((1 << (32 - TB)) - 1)
+    var t = Int(key & TMASK)
+    var p = Int(rp[t])
+    var base = 3 * t
+    var m = V3(1, 1, -1, 0) if mirror else V3(1, 1, 1, 0)
+    var a = vertex(pi, pf, rv, rt, pose, cam, f, p, base) * m
+    var b = vertex(pi, pf, rv, rt, pose, cam, f, p, base + 1) * m
+    var c = vertex(pi, pf, rv, rt, pose, cam, f, p, base + 2) * m
+    var h = tri_hit(eye, ray, a, b, c)
+    var n = unit(cross(b - a, c - a)) * (Float32(-1) if mirror else Float32(1))  # a reflection flips the winding
+    if h[0] < 3.4e38:  # smooth normal, unless it disagrees with the face (two-sided thin parts: wing normals cancel)
+        var ns = unit(vnormal(pi, pf, rv, rt, pose, f, p, base) * (1 - h[1] - h[2]) + vnormal(pi, pf, rv, rt, pose, f, p, base + 1) * h[1]
+                      + vnormal(pi, pf, rv, rt, pose, f, p, base + 2) * h[2]) * m
+        if dot(ns, n) > 0.5:
+            n = ns
+    if dot(n, ray) > 0:
+        n = -n
+    var sh = Float32(1)
+    if not mirror:
         var x0 = eye + ray * tt
-        var sh = Float32(1)
         comptime if SHADOW == 2:
             sh = shadow_map(sm, cam, x0, key & 0xFFFFFFFF, dot(n, sun()))
         comptime if TERRAIN:
             sh = min(sh, terrain_shadow(x0, terrain(cam)))
-        var rgb = V3(pf[PFS * p + 17], pf[PFS * p + 18], pf[PFS * p + 19], 0)
-        if h[0] < 3.4e38:  # the vertex colours (texture baked per vertex), interpolated
-            rgb = (vcolour(pi, rv, rt, p, base) * (1 - h[1] - h[2]) + vcolour(pi, rv, rt, p, base + 1) * h[1]
-                   + vcolour(pi, rv, rt, p, base + 2) * h[2])
-        return light(rgb * rgb, n, view, sh, ao, 0.35)  # no fog on animals: at world-camera distances it greys them out
+    var rgb = V3(pf[PFS * p + 17], pf[PFS * p + 18], pf[PFS * p + 19], 0)
+    if h[0] < 3.4e38:  # the vertex colours (texture baked per vertex), interpolated
+        rgb = (vcolour(pi, rv, rt, p, base) * (1 - h[1] - h[2]) + vcolour(pi, rv, rt, p, base + 1) * h[1]
+               + vcolour(pi, rv, rt, p, base + 2) * h[2])
+    return light(rgb * rgb, n * m, unit(ray) * m, sh, ao, 0.35)  # no fog on animals: at world-camera distances it greys them out
+
+
+@always_inline
+def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
+           key: UInt64, tt: Float32, ao: Float32, mk: UInt64) -> V3:
+    """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
+    else the ground or box (the flat floor mixes in the mirror layer's key mk at REFL), else the sky. Fog: ground only."""
+    var g = ground_hit(cam, eye, ray)
+    var view = unit(ray)
+    var fogc = V3(0.36, 0.4225, 0.5184, 0)  # horizon colour, linear
+    if key != EMPTY and tt < g[0]:
+        return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False)
     if BOX > 0 and g[1] >= 0:
         var hit = eye + ray * g[0]
         var face = g[1]
@@ -504,8 +538,12 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
             sh = blob(pose, cam, hit)
         comptime if TERRAIN:
             sh = min(sh, terrain_shadow(hit, terrain(cam)))
+        var lit = light(base * base, n, view, sh, ao, 0)
+        comptime if REFLECT:
+            if mk != EMPTY:
+                lit = lit * (1 - REFL) + animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, mk, 0, 1, True) * REFL
         var fade = Float32(1) / (1 + 0.02 * sqrt(dot(hit - eye, hit - eye)))
-        return light(base * base, n, view, sh, ao, 0) * fade + fogc * (1 - fade)
+        return lit * fade + fogc * (1 - fade)
     return sky(view)
 
 
@@ -519,10 +557,14 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
     var ray = c[3] * c[4] + c[1] * px - c[2] * py
     var key = vis[i]
     var g = ground_hit(cam, c[0], ray)
-    var fly = key != EMPTY and depth(key) < g[0] * c[4]  # raster depth is view z = ray parameter x focal
-    var z0 = depth(key) if fly else g[0] * c[4]
+    var front = key != EMPTY and depth(key) < g[0] * c[4]  # raster depth is view z = ray parameter x focal
+    var z0 = depth(key) if front else g[0] * c[4]
+    var mk = sm.ptr.unsafe_offset(OMR + i)[] if REFLECT else EMPTY
+    var gk = sm.ptr.unsafe_offset(OGL + i)[] if GLASS else EMPTY
+    var glass = gk != EMPTY and depth(gk) < z0
+    var fly = (front and pi[5 * Int(rp[Int(key & TMASK)])] > 0) or glass  # alpha: animal parts only (not world parts)
     var ao = occlusion(vis, i, z0, c[4]) if z0 < 3.4e38 else Float32(1)
-    var col = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, key, depth(key) / c[4], ao)
+    var col = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, key, depth(key) / c[4], ao, mk)
     comptime if AA:
         var x = i % W
         var y = i // W
@@ -551,15 +593,18 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
                         var kk = vis[l * W + j]
                         if kk == EMPTY or kk == bkey:
                             continue
-                        var f = Int((kk >> 17) & 0x7FFF)
-                        var t = Int(kk & 0x1FFFF)
+                        var f = Int(kk >> TB64) & ((1 << (32 - TB)) - 1)
+                        var t = Int(kk & TMASK)
                         var p = Int(rp[t])
                         var h = tri_hit(c[0], rs, vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t), vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + 1),
                                         vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + 2))
                         if h[0] < best:
                             best = h[0]
                             bkey = kk
-                col += sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], rs, bkey, best, ao) * 0.25
+                col += sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], rs, bkey, best, ao, mk) * 0.25
+    if glass:  # a see-through part in front: its colour over the scene at its alpha
+        var a = pf[PFS * Int(rp[Int(gk & TMASK)]) + 20]
+        col = col * (1 - a) + animal(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, gk, depth(gk) / c[4], 1, False) * a
     var r = UInt32(min(sqrt(max(col[0], 0)), 1) * 255)
     var gg = UInt32(min(sqrt(max(col[1], 0)), 1) * 255)
     var b = UInt32(min(sqrt(max(col[2], 0)), 1) * 255)
@@ -576,13 +621,20 @@ def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clea
           ks: type_of(DeviceContext(0).compile_function[shade]()), ksc: type_of(DeviceContext(0).compile_function[suncam]()),
           kcs: type_of(DeviceContext(0).compile_function[clear_sm]()), vis: TVIS, sm: TVIS, img: TIMG, tpi: TPI, tpf: TPF, trv: TRV, trt: TRT,
           trp: TRP, tpose: TPOSE, tcam: TCAM, tscam: TCAM) raises:
-    """One frame's passes on the card: (SHADOW=2) sun camera, shadow map; clear, raster, shade."""
+    """One frame's passes on the card: aux layers cleared, (SHADOW=2) sun camera + shadow map, view raster, (GLASS) the
+    see-through layer, (REFLECT) the mirror layer; shade."""
+    var g = (F * NTRI + 255) // 256
+    comptime if NAUX > 0:
+        ctx.enqueue_function(kcs, sm, grid_dim=(NSM + 255) // 256, block_dim=256)
     comptime if SHADOW == 2:
         ctx.enqueue_function(ksc, tcam, tscam, grid_dim=1, block_dim=1)
-        ctx.enqueue_function(kcs, sm, grid_dim=(NSM + 255) // 256, block_dim=256)
-        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tscam, grid_dim=(F * NTRI + 255) // 256, block_dim=256)
+        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tscam, Int32(0), Int32(0), grid_dim=g, block_dim=256)
     ctx.enqueue_function(kc, vis, grid_dim=(W * H + 255) // 256, block_dim=256)
-    ctx.enqueue_function(kr, vis, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(F * NTRI + 255) // 256, block_dim=256)
+    ctx.enqueue_function(kr, vis, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(0), Int32(0), grid_dim=g, block_dim=256)
+    comptime if GLASS:
+        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OGL), Int32(1), grid_dim=g, block_dim=256)
+    comptime if REFLECT:
+        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), grid_dim=g, block_dim=256)
     ctx.enqueue_function(ks, vis, sm, img, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
 
 
@@ -624,7 +676,7 @@ def load(path: String, nbytes: Int) raises -> List[UInt8]:
 
 
 def main() raises:
-    comptime assert NTRI <= (1 << 17) and F <= (1 << 15), "id = animal << 17 | triangle must fit 32 bits"
+    comptime assert F <= (1 << (32 - TB)), "id = animal << TB | triangle must fit 32 bits"
     var a = argv()
     var rdir = String(a[1])
     var frames = Int(String(a[4]))

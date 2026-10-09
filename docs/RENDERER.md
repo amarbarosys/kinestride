@@ -61,7 +61,7 @@ model.py export (once)                       engine step (GPU, every physics ste
 | LOD meshes (step 6) | the same format at 10k and 1k triangles | ~110 KB | nothing |
 | poses | the engine's own xpos / xquat rows | 0 extra | animals, already paid |
 | visibility buffer | uint64 per pixel, 1920 x 1080 | 16.6 MB | pixels |
-| shadow map | uint64 per pixel, the view's size (raster is compiled for W x H); 8 B when SHADOW != 2 | 16.6 MB | pixels |
+| aux layers (shadow map, glass, mirror) | uint64 per pixel each, the view's size (raster is compiled for W x H); `NSM` = their sum | 16.6 MB each at 1080p | pixels |
 | image | RGBA8 per pixel, device | 8.3 MB | pixels |
 | host ring | 2 pinned RGBA8 frames, reused | 16.6 MB | pixels |
 
@@ -144,6 +144,9 @@ All in `shade`, comptime-selected, no per-frame allocation:
 | (always) | | SSAO: 8 neighbours 0.12 mm away in the visibility buffer, a neighbour 0.004..0.5 mm nearer occludes (darkens leg-body creases and the ground at the feet) |
 | `SHADOW` | 2 | 2: shadow map, raster from a near-orthographic sun camera over the view target (50 x the view distance up the sun ray), 3x3 PCF, slope-scaled bias, a texel of the pixel's own triangle never shades it. 1: a Gaussian blob of radius `BLOB_UM` per animal under its root's sun shadow point (no extra pass; loops over animals per ground pixel, so small F). 0: none |
 | `TERRAIN` | 0 | adds terrain self-shadow: 16 steps up the sun ray, soft penumbra |
+| (always) | | colour per vertex baked at export (`meshes`): MuJoCo cube textures sampled in each vertex's direction at a 5x5 mip level, times the material rgba (the fly's materials are white; its colour is in textures); rv.bin = position, normal, rgb (RVI = 9 int16 per vertex) |
+| `GLASS` | 1 | parts with alpha < 1 (wings, alpha 0.3) rastered into their own layer and blended over the scene at their alpha |
+| `REFLECT` | 1 on a flat floor | the opaque scene rastered mirrored in z = 0 into a layer; the floor mixes it at 0.2 (MuJoCo's grid reflectance) |
 | `AA` | 1 | silhouette pixels (a 4-neighbour changes animal / ground or jumps 5 % in depth) average 4 rotated-grid sub-rays, each tested against the triangles of the 3x3 neighbourhood, then the ground |
 
 `kinestride/render_look.py OUT N` renders N standing flies (1 close-up, or a grid) at 1920 x 1080 and prints ms
@@ -156,3 +159,9 @@ IoU 0.9948 / 0.9981 / 0.9952 (alpha is the centre sample, unchanged by AA).
 
 Textures and the fly's own compound-eye view. Walking needs S3 (actuators and adhesion); until then the renderer shows the passive
 body, which is still a useful look at contacts.
+
+Keys: depth bits << 32 | animal << TB | triangle, with TB the bits `NTRI` needs (17 for the fly, 18 with the arena's 249k
+triangles), so the animal field shrinks as the model grows (`comptime assert F <= 2^(32 - TB)`). `render_check` draws the
+arena's box and ellipsoid geoms (`meshes(world=[])`); alpha marks animal parts only. Compared side by side with MuJoCo
+(2026-10-09, render_check views): textured golden-brown body, see-through wings, reflections, arena walls; the floor stays
+our grey checker (MuJoCo's is its dark grid material). 960 x 540 frame 0.72 -> 1.15 ms with glass, mirror and arena.

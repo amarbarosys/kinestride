@@ -108,7 +108,7 @@ def eye_raster(vis: TEVIS, ecam: TECAM, pi: ren.TPI, pf: ren.TPF, rv: ren.TRV, r
     var x1 = min(Int(max(sx[0], max(sx[1], sx[2]))) + 1, W - 1)
     var y0 = max(Int(min(sy[0], min(sy[1], sy[2]))), 0)
     var y1 = min(Int(max(sy[0], max(sy[1], sy[2]))) + 1, H - 1)
-    var id = UInt64(f << 17 | t)
+    var id = UInt64(f << ren.TB | t)
     for y in range(y0, y1 + 1):
         var py = Float32(y) + 0.5
         for x in range(x0, x1 + 1):
@@ -133,7 +133,7 @@ def eye_shade(vis: TEVIS, ret: TRET, eye_id: Int32, pi: ren.TPI, pf: ren.TPF, rv
     var key = vis[i]
     var lum = Float32(0.6)
     if key != ren.EMPTY:
-        var t = Int(key & 0x1FFFF)
+        var t = Int(key & ren.TMASK)
         var p = Int(rp[t])
         var a = ren.vertex(pi, pf, rv, rt, pose, cam0, f, p, 3 * t)
         var n = cross(ren.vertex(pi, pf, rv, rt, pose, cam0, f, p, 3 * t + 1) - a, ren.vertex(pi, pf, rv, rt, pose, cam0, f, p, 3 * t + 2) - a)

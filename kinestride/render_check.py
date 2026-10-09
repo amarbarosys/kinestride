@@ -31,7 +31,7 @@ def build(src, out, flags):
 def main(out):
     out = Path(out)
     m = export(MJCF, out)
-    meshes(MJCF, out)
+    meshes(MJCF, out, world=[])  # the arena's box and ellipsoid geoms drawn too, as MuJoCo draws them (alpha: animal parts only)
     q, v = standing(m, 2)
     q, v = q[:1], v[:1]
     q.astype(np.float32).T.copy().tofile(out / 'qpos.bin')
