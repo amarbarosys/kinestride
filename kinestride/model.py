@@ -1124,12 +1124,12 @@ def meshes(mjcf, out, grid=0, world=None):
     """Renderer tables (docs/RENDERER.md) for every mesh geom: rmi.bin int32 per part (body, vertex offset,
     vertex count, triangle offset, triangle count), rmf.bin float32 per part (local pos 3, local quat 4, box
     offset 3, box scale 3, bounding sphere centre 3 and radius 1, rgba 4), rv.bin int16 vertices quantised to the
-    part's box, rt.bin uint16 triangles local to the part, rp.bin uint8 part per triangle. Returns the decode error relative to part size.
+    part's box then int16 unit vertex normals x 32767 (area-weighted face normals, mesh frame), rt.bin uint16 triangles local to the part, rp.bin uint8 part per triangle. Returns the decode error relative to part size.
     world: also draw the world body's box and ellipsoid geoms (walls, stones) and these extra world parts, a list of
     (vertices (n, 3) world mm, faces (m, 3), rgba) (kinestride/assets.py); body 0 parts are drawn fixed (render.vertex)."""
     m, out = load(mjcf), Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    ints, floats, verts, tris, part, worst = [], [], [], [], [], 0.0
+    ints, floats, verts, norms, tris, part, worst = [], [], [], [], [], [], 0.0
 
     def add(body, pos, quat, v, f, rgba, name):
         nonlocal worst
@@ -1143,6 +1143,12 @@ def meshes(mjcf, out, grid=0, world=None):
         ints.extend([body, len(verts), len(v), len(tris), len(f)])
         floats.extend([*pos, *quat, *(lo + 32768 * scale), *scale, *centre, np.linalg.norm(v - centre, axis=1).max(), *rgba])
         verts.extend(qv)
+        f = np.asarray(f)
+        fn = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])  # area-weighted face normals
+        vn = np.zeros_like(v)
+        for k in range(3):
+            np.add.at(vn, f[:, k], fn)
+        norms.extend(np.round(vn / np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-30) * 32767).astype(np.int16))
         tris.extend(np.asarray(f).astype(np.uint16))
         part.extend([len(ints) // 5 - 1] * len(f))
 
@@ -1172,7 +1178,7 @@ def meshes(mjcf, out, grid=0, world=None):
             add(0, (0, 0, 0), (1, 0, 0, 0), np.asarray(v, float), f, rgba, f'world part {i}')
     np.array(ints, np.int32).tofile(out / 'rmi.bin')
     np.array(floats, np.float32).tofile(out / 'rmf.bin')
-    np.array(verts, np.int16).tofile(out / 'rv.bin')
+    np.concatenate([np.array(verts, np.int16), np.array(norms, np.int16)]).tofile(out / 'rv.bin')
     np.array(tris, np.uint16).tofile(out / 'rt.bin')
     np.array(part, np.uint8).tofile(out / 'rp.bin')  # part of each triangle (69 parts here; export refuses 256+)
     (out / 'rsizes.txt').write_text(f'-DNPART={len(ints) // 5} -DNRV={len(verts)} -DNRT={3 * len(tris)}\n')  # NRT: indices

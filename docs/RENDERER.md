@@ -40,7 +40,12 @@ model.py export (once)                       engine step (GPU, every physics ste
                  raster pass: one thread per triangle, 64-bit atomicMin
                  into the visibility buffer = depth 32 | fly 12 | triangle 20
                                           ▼
-                 shade pass: one thread per pixel, ids -> normal, part colour, Lambert + floor
+                 (SHADOW=2) the same raster pass from the sun's camera into the shadow map
+                                          ▼
+                 shade pass: one thread per pixel, ids -> smooth normal (vertex normals,
+                 barycentric), sun + sky/ground ambient + highlight in linear light, shadow
+                 (map 3x3 PCF | blob | terrain self-shadow), SSAO from vis depths, fog,
+                 sky gradient; silhouette pixels: 4 analytic sub-rays (AA=1)
                                           ▼
                  RGBA8 into a pinned host ring (2 frames) ──▶ mpv (live) or ffmpeg (mp4), one pipe
 ```
@@ -50,11 +55,13 @@ model.py export (once)                       engine step (GPU, every physics ste
 | what | layout | bytes | grows with |
 |---|---|---:|---|
 | vertices | int16 x 3, quantised to each part's bounding box (scale + offset per part) | 330 KB | nothing |
+| vertex normals | int16 x 3 unit x 32767 after the vertices in rv.bin (area-weighted, mesh frame) | 330 KB | nothing |
 | triangles | uint16 x 3 per triangle, local to the part (largest part: 1,002 vertices) | 690 KB | nothing |
 | part table | body id, local pose (3 + 4), quantisation (6), bounding sphere (4), colour (1) | 6 KB | nothing |
 | LOD meshes (step 6) | the same format at 10k and 1k triangles | ~110 KB | nothing |
 | poses | the engine's own xpos / xquat rows | 0 extra | animals, already paid |
 | visibility buffer | uint64 per pixel, 1920 x 1080 | 16.6 MB | pixels |
+| shadow map | uint64 per pixel, the view's size (raster is compiled for W x H); 8 B when SHADOW != 2 | 16.6 MB | pixels |
 | image | RGBA8 per pixel, device | 8.3 MB | pixels |
 | host ring | 2 pinned RGBA8 frames, reused | 16.6 MB | pixels |
 
@@ -126,7 +133,25 @@ animal about 100 x too far (its fixture repeated the mix); the fixture and a sho
 Every step reports ms per frame (median of 1,000 frames after a 1 s warm-up), bytes allocated, VRAM
 and RSS, with the LACT profile named.
 
+## Look (2026-10-09)
+
+All in `shade`, comptime-selected, no per-frame allocation:
+
+| flag | default | what |
+|---|---|---|
+| (always) | | gamma 2 (albedo squared in, sqrt out), sky/ground hemisphere ambient, sun at 57 degrees, Blinn highlight on animals, distance fog on everything, sky gradient |
+| (always) | | smooth normals from `rv.bin` vertex normals; where the interpolated normal disagrees with the face by > 60 degrees (two-sided thin parts, wing normals cancel) the face normal is kept |
+| (always) | | SSAO: 8 neighbours 0.12 mm away in the visibility buffer, a neighbour 0.004..0.5 mm nearer occludes (darkens leg-body creases and the ground at the feet) |
+| `SHADOW` | 2 | 2: shadow map, raster from a near-orthographic sun camera over the view target (50 x the view distance up the sun ray), 3x3 PCF, slope-scaled bias, a texel of the pixel's own triangle never shades it. 1: a Gaussian blob of radius `BLOB_UM` per animal under its root's sun shadow point (no extra pass; loops over animals per ground pixel, so small F). 0: none |
+| `TERRAIN` | 0 | adds terrain self-shadow: 16 steps up the sun ray, soft penumbra |
+| `AA` | 1 | silhouette pixels (a 4-neighbour changes animal / ground or jumps 5 % in depth) average 4 rotated-grid sub-rays, each tested against the triangles of the 3x3 neighbourhood, then the ground |
+
+`kinestride/render_look.py OUT N` renders N standing flies (1 close-up, or a grid) at 1920 x 1080 and prints ms
+per frame. Measured under `--shared` (a mojo-baro gate job on the card), before -> after:
+1 fly 1.36 ms -> see below, 64 flies 1.23 -> 2.76 ms (SHADOW=2) / 2.45 ms (SHADOW=1). `render_check` stays
+IoU 0.9948 / 0.9981 / 0.9952 (alpha is the centre sample, unchanged by AA).
+
 ## Not in scope
 
-Textures, shadows, anti-aliasing and the fly's own compound-eye view. Walking needs S3 (actuators and adhesion); until then the renderer shows the passive
+Textures and the fly's own compound-eye view. Walking needs S3 (actuators and adhesion); until then the renderer shows the passive
 body, which is still a useful look at contacts.
