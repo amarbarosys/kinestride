@@ -148,7 +148,8 @@ All in `shade`, comptime-selected, no per-frame allocation:
 
 `kinestride/render_look.py OUT N` renders N standing flies (1 close-up, or a grid) at 1920 x 1080 and prints ms
 per frame. Measured under `--shared` (a mojo-baro gate job on the card), before -> after:
-1 fly 1.36 ms -> see below, 64 flies 1.23 -> 2.76 ms (SHADOW=2) / 2.45 ms (SHADOW=1). `render_check` stays
+1 fly 1.36 -> 1.67 ms, 64 flies 1.23 -> 2.76 ms (SHADOW=2) / 2.45 ms (SHADOW=1). Live world in fly-connectome
+(fly + spider on terrain, 960 x 540, K=10 physics + render): 78.2 -> 79.0 ms per frame. `render_check` stays
 IoU 0.9948 / 0.9981 / 0.9952 (alpha is the centre sample, unchanged by AA).
 
 ## Not in scope
