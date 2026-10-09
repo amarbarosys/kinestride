@@ -15,7 +15,7 @@ from kinestride.convex_check import hull_tables, randrot, F64, F32
 from kinestride.model import terrain
 from kinestride.world import full
 
-BODY = '.work/assets/fly/body.xml'
+BODY = str(__import__('pathlib').Path(__file__).resolve().parents[1] / '.work/assets/fly/body.xml')
 PARAMS = (0, 0, 0.6, 8.0, 4, 1, 2.0, 0.5)  # slope x y, amplitude mm, wavelength mm, octaves, seed, lacunarity, gain
 HW, HO = 20, 1 + 7 * 50
 G = mujoco.mjtGeom

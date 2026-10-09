@@ -14,7 +14,7 @@ import numpy as np
 import mujoco
 from pathlib import Path
 
-BODY = '.work/assets/fly/body.xml'
+BODY = str(__import__('pathlib').Path(__file__).resolve().parents[1] / '.work/assets/fly/body.xml')
 FLIGHT_PAIRS = os.environ.get('FLIGHT_PAIRS', '.work/fc/flight_pairs.xml')
 NAMES = {'sphere': mujoco.mjtGeom.mjGEOM_SPHERE, 'capsule': mujoco.mjtGeom.mjGEOM_CAPSULE, 'ellipsoid': mujoco.mjtGeom.mjGEOM_ELLIPSOID,
          'cylinder': mujoco.mjtGeom.mjGEOM_CYLINDER}

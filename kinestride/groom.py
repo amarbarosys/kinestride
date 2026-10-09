@@ -14,7 +14,7 @@ import numpy as np
 sys.path.insert(0, '.')
 from kinestride.model import load, standing  # noqa: E402
 
-XML = '.work/assets/fly/body.xml'
+XML = str(__import__('pathlib').Path(__file__).resolve().parents[1] / '.work/assets/fly/body.xml')
 OUT = Path(sys.argv[1])
 COUNT, STEPS = 64, 30
 m = load(XML)

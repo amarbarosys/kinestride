@@ -16,7 +16,7 @@ import numpy as np
 
 from kinestride.model import ENGINE, export, meshes, standing
 
-MJCF = '.work/assets/fly/body.xml'
+MJCF = str(__import__('pathlib').Path(__file__).resolve().parents[1] / '.work/assets/fly/body.xml')
 W, H = 960, 540
 VIEWS = ((90, -20), (0, -45), (225, -10))  # azimuth, elevation in degrees (MuJoCo free camera)
 DIST = 6.0  # mm
