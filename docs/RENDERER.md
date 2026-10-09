@@ -139,7 +139,7 @@ All in `shade`, comptime-selected, no per-frame allocation:
 
 | flag | default | what |
 |---|---|---|
-| (always) | | gamma 2 (albedo squared in, sqrt out), sky/ground hemisphere ambient, sun at 57 degrees, Blinn highlight on animals, distance fog on everything, sky gradient |
+| (always) | | gamma 2 (albedo squared in, sqrt out), sky/ground hemisphere ambient, sun at 57 degrees, Blinn highlight on animals, distance fog on the ground only (fogged animals turned grey at world-camera distance), sky gradient |
 | (always) | | smooth normals from `rv.bin` vertex normals; where the interpolated normal disagrees with the face by > 60 degrees (two-sided thin parts, wing normals cancel) the face normal is kept |
 | (always) | | SSAO: 8 neighbours 0.12 mm away in the visibility buffer, a neighbour 0.004..0.5 mm nearer occludes (darkens leg-body creases and the ground at the feet) |
 | `SHADOW` | 2 | 2: shadow map, raster from a near-orthographic sun camera over the view target (50 x the view distance up the sun ray), 3x3 PCF, slope-scaled bias, a texel of the pixel's own triangle never shades it. 1: a Gaussian blob of radius `BLOB_UM` per animal under its root's sun shadow point (no extra pass; loops over animals per ground pixel, so small F). 0: none |

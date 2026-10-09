@@ -437,7 +437,7 @@ def sky(view: V3) -> V3:
 def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
            key: UInt64, tt: Float32, ao: Float32) -> V3:
     """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
-    else the ground or box, else the sky. Distance fog toward the horizon colour."""
+    else the ground or box, else the sky. Distance fog (ground only) toward the horizon colour."""
     var g = ground_hit(cam, eye, ray)
     var view = unit(ray)
     var fogc = V3(0.36, 0.4225, 0.5184, 0)  # horizon colour, linear
@@ -465,8 +465,7 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
         comptime if TERRAIN:
             sh = min(sh, terrain_shadow(x0, terrain(cam)))
         var rgb = V3(pf[PFS * p + 17], pf[PFS * p + 18], pf[PFS * p + 19], 0)
-        var fade = Float32(1) / (1 + 0.02 * sqrt(dot(x0 - eye, x0 - eye)))
-        return light(rgb * rgb, n, view, sh, ao, 0.35) * fade + fogc * (1 - fade)
+        return light(rgb * rgb, n, view, sh, ao, 0.35)  # no fog on animals: at world-camera distances it greys them out
     if BOX > 0 and g[1] >= 0:
         var hit = eye + ray * g[0]
         var face = g[1]
