@@ -3,4 +3,4 @@
 __pycache__/
 *.egg-info/
 MUJOCO_LOG.TXT
-.claude/
+.claude/checkpoints/
