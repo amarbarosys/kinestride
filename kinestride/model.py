@@ -1120,18 +1120,52 @@ def convex_block(m, regex, convex=True, hfexact=False):
     return np.array(kind + [c for ab in shapes for c in ab] + [int(m.pair_dim[i]) for i in sel]), np.concatenate([head, *size, *size2]), sizes
 
 
+def cube_colour(m, tex, v):
+    """MuJoCo cube texture (6 faces stacked: +x -x +y -y +z -z) sampled in each vertex's direction from the mesh origin, the
+    way MuJoCo maps a cube texture on a mesh without texture coordinates; rgb in 0..1."""
+    w, nc = int(m.tex_width[tex]), int(m.tex_nchannel[tex])
+    img = m.tex_data[m.tex_adr[tex]:m.tex_adr[tex] + 6 * w * w * nc].reshape(6, w, w, nc)[..., :3] / 255.0
+    if w % 5 == 0:  # a mip level, as MuJoCo's filtered lookup sees it: 5x5 texel means (its 5 % random black marks blur away)
+        img = img.reshape(6, w // 5, 5, w // 5, 5, 3).mean((2, 4))
+        w //= 5
+    a = np.abs(v)
+    ax = a.argmax(1)
+    face = 2 * ax + (np.take_along_axis(v, ax[:, None], 1)[:, 0] < 0)
+    x, y, z = v.T
+    ma = np.maximum(a.max(1), 1e-30)
+    sel = [face == k for k in range(6)]
+    sc = np.select(sel, [-z, z, x, x, x, -x]) / ma  # GL cube-map face orientation
+    tc = np.select(sel, [-y, -y, z, -z, -y, -y]) / ma
+    return img[face, np.clip(((tc + 1) / 2 * w).astype(int), 0, w - 1), np.clip(((sc + 1) / 2 * w).astype(int), 0, w - 1)]
+
+
+def vertex_colour(m, g, v):
+    """Display colour per vertex of mesh geom g: material rgb x its texture (cube: sampled per vertex; 2d: its mean)."""
+    mat = m.geom_matid[g]
+    rgba = m.mat_rgba[mat] if mat >= 0 else m.geom_rgba[g]
+    col = np.tile(rgba[:3], (len(v), 1)).astype(np.float64)
+    tex = m.mat_texid[mat][mujoco.mjtTextureRole.mjTEXROLE_RGB] if mat >= 0 else -1
+    if tex >= 0 and m.tex_type[tex] == mujoco.mjtTexture.mjTEXTURE_CUBE:
+        col *= cube_colour(m, tex, v)
+    elif tex >= 0:
+        n = int(m.tex_nchannel[tex])
+        col *= m.tex_data[m.tex_adr[tex]:m.tex_adr[tex] + m.tex_width[tex] * m.tex_height[tex] * n].reshape(-1, n)[:, :3].mean(0) / 255.0
+    return col
+
+
 def meshes(mjcf, out, grid=0, world=None):
     """Renderer tables (docs/RENDERER.md) for every mesh geom: rmi.bin int32 per part (body, vertex offset,
     vertex count, triangle offset, triangle count), rmf.bin float32 per part (local pos 3, local quat 4, box
     offset 3, box scale 3, bounding sphere centre 3 and radius 1, rgba 4), rv.bin int16 vertices quantised to the
-    part's box then int16 unit vertex normals x 32767 (area-weighted face normals, mesh frame), rt.bin uint16 triangles local to the part, rp.bin uint8 part per triangle. Returns the decode error relative to part size.
+    part's box then int16 unit vertex normals x 32767 (area-weighted face normals, mesh frame), then int16 vertex rgb 0..255
+    (material x texture: vertex_colour), rt.bin uint16 triangles local to the part, rp.bin uint8 part per triangle. Returns the decode error relative to part size.
     world: also draw the world body's box and ellipsoid geoms (walls, stones) and these extra world parts, a list of
     (vertices (n, 3) world mm, faces (m, 3), rgba) (fly-connectome agent/body_engine/assets.py builds them with kinestride/assets.py); body 0 parts are drawn fixed (render.vertex)."""
     m, out = load(mjcf), Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    ints, floats, verts, norms, tris, part, worst = [], [], [], [], [], [], 0.0
+    ints, floats, verts, norms, cols, tris, part, worst = [], [], [], [], [], [], [], 0.0
 
-    def add(body, pos, quat, v, f, rgba, name):
+    def add(body, pos, quat, v, f, rgba, name, col=None):
         nonlocal worst
         if len(v) > 65535 or len(ints) // 5 >= 255:
             raise SystemExit(f'FAIL meshes: {name}: over 65,535 vertices (uint16 triangles) or 255 parts (uint8 part ids)')
@@ -1149,6 +1183,7 @@ def meshes(mjcf, out, grid=0, world=None):
         for k in range(3):
             np.add.at(vn, f[:, k], fn)
         norms.extend(np.round(vn / np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-30) * 32767).astype(np.int16))
+        cols.extend(np.round(np.clip(np.tile(rgba[:3], (len(v), 1)) if col is None else col, 0, 1) * 255).astype(np.int16))
         tris.extend(np.asarray(f).astype(np.uint16))
         part.extend([len(ints) // 5 - 1] * len(f))
 
@@ -1156,15 +1191,17 @@ def meshes(mjcf, out, grid=0, world=None):
         k = m.geom_dataid[g]
         v = m.mesh_vert[m.mesh_vertadr[k]:m.mesh_vertadr[k] + m.mesh_vertnum[k]].astype(np.float64)
         f = m.mesh_face[m.mesh_faceadr[k]:m.mesh_faceadr[k] + m.mesh_facenum[k]]
+        col = vertex_colour(m, g, v)
         if grid:  # vertex clustering on a grid x grid x grid lattice over the part (Flybody's 1.6 M-vertex meshes; render only)
             c = np.floor((v - v.min(0)) / (np.ptp(v, 0).max() / grid + 1e-12)).astype(np.int64)
             _, inv = np.unique(c, axis=0, return_inverse=True)
             inv = inv.ravel()
             v = np.array([np.bincount(inv, v[:, a]) for a in range(3)]).T / np.bincount(inv)[:, None]
+            col = np.array([np.bincount(inv, col[:, a]) for a in range(3)]).T / np.bincount(inv)[:, None]
             f = inv[f]
             f = np.unique(f[(f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 0] != f[:, 2])], axis=0)
         rgba = m.mat_rgba[m.geom_matid[g]] if m.geom_matid[g] >= 0 else m.geom_rgba[g]
-        add(m.geom_bodyid[g], m.geom_pos[g], m.geom_quat[g], v, f, rgba, f'geom {g}')
+        add(m.geom_bodyid[g], m.geom_pos[g], m.geom_quat[g], v, f, rgba, f'geom {g}', col)
     if world is not None:
         from kinestride.assets import primitive, split
         for g in np.flatnonzero((m.geom_bodyid == 0) & np.isin(m.geom_type, (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID))):
@@ -1178,12 +1215,12 @@ def meshes(mjcf, out, grid=0, world=None):
             add(0, (0, 0, 0), (1, 0, 0, 0), np.asarray(v, float), f, rgba, f'world part {i}')
     np.array(ints, np.int32).tofile(out / 'rmi.bin')
     np.array(floats, np.float32).tofile(out / 'rmf.bin')
-    np.concatenate([np.array(verts, np.int16), np.array(norms, np.int16)]).tofile(out / 'rv.bin')
+    np.concatenate([np.array(verts, np.int16), np.array(norms, np.int16), np.array(cols, np.int16)]).tofile(out / 'rv.bin')
     np.array(tris, np.uint16).tofile(out / 'rt.bin')
     np.array(part, np.uint8).tofile(out / 'rp.bin')  # part of each triangle (69 parts here; export refuses 256+)
     (out / 'rsizes.txt').write_text(f'-DNPART={len(ints) // 5} -DNRV={len(verts)} -DNRT={3 * len(tris)}\n')  # NRT: indices
     print(f'{mjcf}: {len(ints) // 5} parts, {len(verts)} vertices, {len(tris)} triangles, '
-          f'{(len(verts) * 6 + len(tris) * 6 + len(part) + len(floats) * 4 + len(ints) * 4) / 1024:.0f} KB; decode error {worst:.1e} of part size')
+          f'{(len(verts) * 18 + len(tris) * 6 + len(part) + len(floats) * 4 + len(ints) * 4) / 1024:.0f} KB; decode error {worst:.1e} of part size')
     return worst
 
 

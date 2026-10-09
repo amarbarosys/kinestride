@@ -10,7 +10,8 @@ Per frame, five passes and no allocation:
   raster  one thread per (animal, triangle): world vertices from body pose x part pose, perspective, edge
           functions over the triangle's pixel box, 64-bit atomic min of (depth bits << 32 | animal << 17 | tri);
           run twice, from the view camera into vis and (SHADOW=2) from the sun into the shadow map sm
-  shade   one thread per pixel, in linear light (gamma 2): smooth normal (vertex normals from rv.bin, barycentric),
+  shade   one thread per pixel, in linear light (gamma 2): smooth normal and colour (vertex normals and texture-baked
+          vertex colours from rv.bin, barycentric),
           sun + sky/ground ambient + highlight, sun shadow (map with 3x3 PCF, or a blob per animal, plus terrain
           self-shadow), screen-space ambient occlusion from vis depths, distance fog, sky gradient; silhouette pixels
           (AA=1) average 4 analytic sub-rays against the triangles of their 3x3 neighbourhood
@@ -53,7 +54,8 @@ comptime NEAR = Float32(1e-3)
 comptime LVIS = row_major[W * H]()
 comptime LPI = row_major[5 * NPART]()
 comptime LPF = row_major[PFS * NPART]()
-comptime LRV = row_major[NRV * 6]()  # int16 vertices (3 per vertex), then int16 unit vertex normals x 32767
+comptime RVI = 9  # int16 per vertex in rv.bin: position 3, unit normal x 32767 3, rgb 0..255 3 (callers load 2 * RVI * NRV bytes)
+comptime LRV = row_major[NRV * RVI]()  # all positions, then all normals, then all colours
 comptime LRT = row_major[NRT]()
 comptime LRP = row_major[NTRI]()
 comptime LPOSE = row_major[PROWS * F]()
@@ -289,6 +291,13 @@ def vnormal(pi: TPI, pf: TPF, rv: TRV, rt: TRT, pose: TPOSE, f: Int, p: Int, k: 
 
 
 @always_inline
+def vcolour(pi: TPI, rv: TRV, rt: TRT, p: Int, k: Int) -> V3:
+    """Display rgb 0..1 at triangle index k of part p (meshes(): material x texture, per vertex)."""
+    var vi = 3 * (2 * NRV + Int(pi[5 * p + 1]) + Int(rt[k]))
+    return V3(Float32(rv[vi]), Float32(rv[vi + 1]), Float32(rv[vi + 2]), 0) / 255
+
+
+@always_inline
 def tri_hit(o: V3, d: V3, a: V3, b: V3, c: V3) -> V3:
     """(t, u, v) of the ray o + t d through triangle abc (Moller-Trumbore); t = 3.4e38 on a miss."""
     var miss = V3(3.4e38, 0, 0, 0)
@@ -467,6 +476,9 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
         comptime if TERRAIN:
             sh = min(sh, terrain_shadow(x0, terrain(cam)))
         var rgb = V3(pf[PFS * p + 17], pf[PFS * p + 18], pf[PFS * p + 19], 0)
+        if h[0] < 3.4e38:  # the vertex colours (texture baked per vertex), interpolated
+            rgb = (vcolour(pi, rv, rt, p, base) * (1 - h[1] - h[2]) + vcolour(pi, rv, rt, p, base + 1) * h[1]
+                   + vcolour(pi, rv, rt, p, base + 2) * h[2])
         return light(rgb * rgb, n, view, sh, ao, 0.35)  # no fog on animals: at world-camera distances it greys them out
     if BOX > 0 and g[1] >= 0:
         var hit = eye + ray * g[0]
@@ -629,13 +641,13 @@ def main() raises:
     var ctx = DeviceContext(0)  # every buffer below is created once; a frame allocates nothing
     var pi_h = load(rdir + "rmi.bin", 20 * NPART)
     var pf_h = load(rdir + "rmf.bin", 4 * PFS * NPART)
-    var rv_h = load(rdir + "rv.bin", 12 * NRV)
+    var rv_h = load(rdir + "rv.bin", 2 * RVI * NRV)
     var rt_h = load(rdir + "rt.bin", 2 * NRT)
     var rp_h = load(rdir + "rp.bin", NTRI)
     var pose_h = load(String(a[2]), 4 * PROWS * F)
     var pi_b = ctx.enqueue_create_buffer[DType.int32](5 * NPART)
     var pf_b = ctx.enqueue_create_buffer[DType.float32](PFS * NPART)
-    var rv_b = ctx.enqueue_create_buffer[DType.int16](6 * NRV)
+    var rv_b = ctx.enqueue_create_buffer[DType.int16](RVI * NRV)
     var rt_b = ctx.enqueue_create_buffer[DType.uint16](NRT)
     var rp_b = ctx.enqueue_create_buffer[DType.uint8](NTRI)
     var pose_b = ctx.enqueue_create_buffer[DType.float32](PROWS * F)
