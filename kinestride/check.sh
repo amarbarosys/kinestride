@@ -554,7 +554,7 @@ if [ "$stage" = solver ]; then  # CG and PGS (mj_solCG, mj_solPGS) vs MuJoCo wit
     done
   done
   # islands: two flies 200 mm apart = two kinematic trees = two MuJoCo islands (own shuffle, own stop). The merged two-fly world differs from its engine
-  # twin by 7e-5 in MuJoCo itself (Newton too: WORLD.md, open), so this test alone runs at REL=2e-4; PGS over both flies' rows as one block (the island loop run over all rows for every root) must fail here
+  # twin by 7e-5 in MuJoCo itself (Newton too: ~/Projects/science/fly-connectome/docs/plans/WORLD.md, open), so this test alone runs at REL=2e-4; PGS over both flies' rows as one block (the island loop run over all rows for every root) must fail here
   FW=$($M -c "from kinestride.model import combine; print(combine('$F', '$F', (200, 0, 0), 'ffworld'))")
   AF=$(env -u ENGINE_OPT $M -m kinestride.model airborne $FW $I/ffworld 0 | tail -1)
   for SV in 1 0; do

@@ -24,7 +24,7 @@ tendon/flex equalities, a constraint joining two bodies' trees.
 
 At 65,536 bodies a launch reads 40 GB and writes 16 GB of DRAM, about 87 % of the card's bandwidth. Each body
 reads 611 KB per step against a 141 KB footprint, because the Newton solver re-reads its factors and vectors every
-iteration (`docs/BODY_ENGINE_OPT.md`, byte budget). Full implicit integration costs 85 KB of scratch per body
+iteration (`docs/ENGINE_OPT.md`, byte budget). Full implicit integration costs 85 KB of scratch per body
 (5.6 GB at 65,536), so it is not yet a mode for large crowds.
 
 ## Running it
@@ -48,7 +48,7 @@ the first consumer: its connectome brains, live viewer and game scenes drive Kin
 The live viewer still lives in fly-connectome, because it compiles the brain kernels in; making its controller
 pluggable is the next step toward game use. The engine has only run on gfx1100.
 
-Reference: `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/BODY_ENGINE_OPT.md` (performance history),
+Reference: `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/ENGINE_OPT.md` (performance history),
 `docs/RENDERER.md`, `docs/HFIELD_CONTACT.md`, port queue `kinestride/port_queue.tsv`. License notes: `NOTICE`.
 
 Port routine (porting a MuJoCo stage, gates, timing): skill `.claude/skills/body-engine/SKILL.md`.

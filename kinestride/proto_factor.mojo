@@ -1,4 +1,4 @@
-"""Optimisation probe (docs/BODY_ENGINE_OPT.md step 2): is one wave per animal with the matrix in LDS
+"""Optimisation probe (docs/ENGINE_OPT.md step 2): is one wave per animal with the matrix in LDS
 faster than one thread per animal through global memory, for MuJoCo's sparse L'DL (mj_factorI) of the fly's
 74-dof mass matrix? Both variants factor the same matrices (64 MuJoCo samples, animal a uses sample a % 64)
 and are checked against MuJoCo's qLD and qLDiagInv before their times count.

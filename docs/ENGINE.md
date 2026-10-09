@@ -10,7 +10,7 @@ Our own renderer draws the engine's poses (`RENDERER.md`). Procedure and rules: 
 
 ## Why a port, when the GPU track is closed
 
-`GPU_BODY_PORT.md` closed GPU physics on 2026-10-02: MuJoCo Warp on gfx1100 reached correct physics
+`~/Brain/kinestride/notes/2026-10-03-gpu-body-port.md` closed GPU physics on 2026-10-02: MuJoCo Warp on gfx1100 reached correct physics
 but stayed below six CPU MuJoCo workers (70,582 steps/s). This is a different bet: MuJoCo's functions
 ported into Mojo for a fixed body, one GPU thread or block per animal, so every rule is ours to change
 (joints, adhesion, new species) and brain and body can share one process.
@@ -121,7 +121,7 @@ to the CPU on this card.
 
 ## Parameters
 
-`.work/research-verified.md` checks a Perplexity report against body-v2. Ours: mass
+A research check (fly-connectome `.work/research-verified`, not kept) compared a Perplexity report with body-v2. Ours: mass
 1.026 mg, CoM x -0.30 mm, femur 0.71-0.84 mm, tibia 0.52-0.68 mm, Euler integrator with Newton
 solver, solref (2e-4, 1.0) and (2e-3, 1.0), friction 0.4 / 1.0, adhesion gain 40, kp 45 and 2. The
 report was wrong on solref damping (1e3), adhesion (at most 1 body weight) and MuJoCo Warp on AMD.

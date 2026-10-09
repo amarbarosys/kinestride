@@ -179,7 +179,7 @@ comptime NFL2 = CSPF + (11 * NWRAP if SPATIAL else 0)
 comptime CCV = NFL2  # NCV: opt.ccd_tolerance, heightfield size 0-3 and origin z (HFEXACT), then per pair geom1's size (3), then per pair geom2's size (3)
 comptime CEQF = NFL2 + (6 + 6 * NCP if NCV > 0 else 0)  # per equality: anchors 0 and 1, quaternions 0 and 1, torquescale, solref, solimp, invweight 2, joint data 5, qpos0 2
 comptime CGF = CEQF + EQF * NEQ
-comptime GAME = get_defined_int["GAME", 0]() == 1 and STAGE >= 7  # game layer per step (docs/GAME_LAYER.md): energy, health, stamina, dead
+comptime GAME = get_defined_int["GAME", 0]() == 1 and STAGE >= 7  # game layer per step (~/Projects/science/fly-connectome/docs/plans/GAME_LAYER.md): energy, health, stamina, dead
 comptime SLEEP = get_defined_int["SLEEP", 0]() == 1  # mj_sleep (model.py sleep_block): opt.sleep_tolerance, then dof_length per dof (the velocity weights)
 comptime SLPF = CGF + (NB if GRAVCOMP else 0)
 comptime GAMEF = SLPF + (1 + NV if SLEEP else 0)  # GAME: rules appended to mf.bin: basal drain, work rate, health regen

@@ -5,8 +5,9 @@ It reads no MJCF. `model.py export` flattens any MuJoCo model into `mi.bin` (int
 the sizes go into `-D` constants, so each body type compiles its own binary. Every ported stage is checked
 against MuJoCo itself, plus a mutation that must fail.
 
-Current status and evidence: `docs/CAPABILITIES.md`, row "Own GPU body engine". Design history: `docs/`
-(BODY_ENGINE, GPU_BODY_PORT, BODY_ENGINE_OPT, ENGINE_FINISH, HFIELD_CONTACT, RENDERER, WORLD, BRAIN_BODY_LOOP).
+Current status: the capability table in `README.md`. Design: `docs/` (ENGINE, ENGINE_OPT, HFIELD_CONTACT,
+CONVEX_CONTACT, RENDERER); history in `~/Brain/kinestride/notes/2026-10-03-gpu-body-port.md` and
+`~/Brain/kinestride/notes/2026-10-03-engine-finish.md`; app plans (WORLD, BRAIN_BODY_LOOP) in `~/Projects/science/fly-connectome/docs/plans/`.
 
 ## Quick start
 ```
@@ -61,7 +62,7 @@ food/decoy descriptor, presence/depletion state and concentration-only antenna s
 The flyloop Shiu worker also supports resident continuous advances: one uploaded neural graph and persistent state
 can be advanced in successive tick windows, including beyond tick 32,000. Its int32 last-spike state costs two
 additional bytes per neuron versus the earlier int16 state; the refractory state stays uint8. See
-`docs/BRAIN_BODY_LOOP.md` and `agent/verify_shiu_continuous.py` for the split-run gate. The one-process sensory,
+`~/Projects/science/fly-connectome/docs/plans/BRAIN_BODY_LOOP.md` and fly-connectome `agent/verify_shiu_continuous.py` for the split-run gate. The one-process sensory,
 neural, body, and renderer path remains pending owner integration.
 
 Fluid forces (opt density, viscosity, wind: ellipsoid model on geoms with fluidshape, inertia-box model on every other body with mass,
@@ -96,7 +97,7 @@ Full implicit (`implicit_factor`, `implicit_solve` in smooth.mojo; note MuJoCo's
 MuJoCo's 6x6 products are linear in that vector and are written as spatial operations (crossMotion, mulInertVec, crossForce). The factor is `mju_factorLUSparse` (reverse order, no fill-in on a tree), the solve `mju_solveLUSparse`. Layout: `model.implicit_block` appends B, D and `mapM2D` as the last ints; scratch rows `OQLU`, `ODCV`, `ODCA`, `ODCF` (fly: 21,348 floats, 85 KB per animal, 5.6 GB at 65,536: a non-walking mode; `WAVE=1` untested).
 Midpoint (`midpoint`, `midpoint_newton`, `mid_eligible`): under implicitfast a childless free body with no live contact on it is integrated by `mj_midpoint`; the engine solves for the velocity change (w_mid - w) so that `(new - old) / h` does not cancel in float32 (9e-5 before, 1e-6 after), and the next position uses MuJoCo's qvel_mid. MuJoCo's `simple` dofs (ipos 0, iquat identity on such a body) have diagonal-only M rows: `crb` stops at `M_rownnz`. A contact pair across two free bodies is refused (two floating origins): pair each with a static geom. A static world sphere now subtracts the animal's floating origin like the plane does.
 
-Brain graph selection and motor-neuron annotation are outside the physics kernels. The MCNS Shiu graph reuses the same CPU/GPU LIF kernels as FlyWire; `agent.verify_mcns` checks exact per-cell spike-count parity on the 165,733-neuron, 6,239,854-edge graph. The FlyWire-compatible DN and leg-MN selectors live in `agent.mcns_mapping` and are documented with coverage in `docs/MCNS.md`.
+Brain graph selection and motor-neuron annotation are outside the physics kernels. The MCNS Shiu graph reuses the same CPU/GPU LIF kernels as FlyWire; `agent.verify_mcns` checks exact per-cell spike-count parity on the 165,733-neuron, 6,239,854-edge graph. The FlyWire-compatible DN and leg-MN selectors live in `agent.mcns_mapping` and are documented with coverage in `~/Projects/science/fly-connectome/docs/plans/MCNS.md`.
 
 ## Files
 ```
@@ -119,7 +120,7 @@ models/      generated bodies (spider.py), eq_test.xml, eq_contact.xml, eq_mocap
 world_check.py, watch_world.py   plume-world gate; `live.py watch K world-game` (follow camera, game bars, plume text and mini-map, fps) and its check
 fly_brain.mojo, fly_gait.mojo, fly_link3.py, fly_gait.py   BRAIN=3: DN readout + drives + FlyGym gait kernel (`fly_gait.mojo`, float64, parity-gated, with `fly_link.Gait`'s drive slew and trim) beside the resident brain of `kinestride/shiu_resident.mojo`; `fly_link3.py` runs the fly gates on one DeviceContext
 fly_link.py   brain-driven fly in live (BRAIN=1 host transport: resident Shiu, flyloop's gait mapping, settled FlyGym start) and its gate (`check.sh flylink`)
-spider_brain.mojo, spider_gait.py, spider_link.py   spider brain<->body link: gait kernel (`-DBRAIN=2`) and its numpy oracle, gate + timing (`live.mojo -DBRAIN=1|2`, docs/SPIDER_BRAIN.md)
+spider_brain.mojo, spider_gait.py, spider_link.py   spider brain<->body link: gait kernel (`-DBRAIN=2`) and its numpy oracle, gate + timing (`live.mojo -DBRAIN=1|2`, `~/Projects/science/fly-connectome/docs/plans/SPIDER_BRAIN.md`)
 ../shiu_worker.mojo, ../shiu.py, ../verify_shiu_continuous.py   resident Shiu advance; deterministic split-run and reset-mutant gate
 spider_jump.py   spider jump: ctrl script, gate (models/spider.py `build(jump=True)`)
 eyes.mojo, spider_eyes.py   spider eyes (`live.mojo -DEYES=1`): per-animal eye cameras from the head pose, retinas [animal][eye][64x64] uint8, prey path from env.bin; eye table, analytic pinhole reference and gate (models/spider.py `build(prey=True)`)

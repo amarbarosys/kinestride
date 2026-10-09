@@ -79,7 +79,7 @@ within its float32 floor).
 memory, VGPR budget against occupancy, hull vertices packed. Each knob is one bench run.
 
 **5. Report (XS).** The final 1k / 16k / 65k table against the baseline above and MuJoCo CPU, in
-`BODY_ENGINE.md` and the board. S2 resumes (noslip, the other 496 contact pairs, S3 actuators) only
+`ENGINE.md` and the board. S2 resumes (noslip, the other 496 contact pairs, S3 actuators) only
 after this.
 
 ## Effort

@@ -2,7 +2,7 @@
 
 ## Context
 Procedural (Minecraft-style, seeded noise, chunked) worlds need non-flat ground. Engine contacts are plane-mesh only
-(`docs/CAPABILITIES.md:11`, "non-plane contacts missing"). Exact MuJoCo parity (`mjc_ConvexHField`) needs a GJK+EPA
+(`~/Projects/science/fly-connectome/docs/CAPABILITIES.md` line 11 at the time, "non-plane contacts missing"). Exact MuJoCo parity (`mjc_ConvexHField`) needs a GJK+EPA
 port (`mjc_ccd`, XL, divergent waves). Chosen: **tangent plane**. Per mesh-ground pair, sample the heightfield under
 the mesh, build the local plane, and run the EXISTING `contacts()` plane-mesh path unchanged. Minimum LOC, near-zero
 per-step cost. Known limit: wrong where terrain bends inside one foot (cell size << foot); generator keeps terrain
@@ -40,7 +40,7 @@ Only `pos1` and `normal` change source; ~25 Mojo LOC in `contacts()` + ~30 in `m
    Report per-field error (ncon, qacc, qfrc_constraint); bar = measured value stated, plus behavioural gate: fly and
    spider stand 300 frames on it, max foot penetration < 2 x flat-floor value, tilt < flat + 5 deg.
 5. **Mutant**: flip gradient sign (normal tilts wrong way) via `mutant-check`; step 3 gate must FAIL.
-6. **Bench** per Memory section; commit with numbers. Update `docs/CAPABILITIES.md` row + `body-engine` skill
+6. **Bench** per Memory section; commit with numbers. Update the README capability table + `body-engine` skill
    "Contacts" section (tangent-plane limit stated).
 
 Out of scope (next plan): seeded noise generator + chunk streaming around the floating origin (fills the same hfield
