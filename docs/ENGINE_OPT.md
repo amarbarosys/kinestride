@@ -109,7 +109,7 @@ the active set) cut that to 16 evaluations and at most 9 iterations, with check.
 
 After it, Newton is still 46 of the 62 ms; the rest of the step is 15 ms.
 
-**Step 1.** 1a (warm start) needs chained steps and moves to step 3. 1b (hull climbing) is dropped:
+**Step 1.** 1a (warm start) is in: K > 0 builds start Newton from the last step's qacc (`OWARM`). 1b (hull climbing) is dropped:
 collision costs 0.8 ms. 1c (dead rows, Hessian only on a state change) was already in place.
 
 **Step 2 probe: wave per animal loses at large batches.** `probes/proto_factor.mojo` runs
