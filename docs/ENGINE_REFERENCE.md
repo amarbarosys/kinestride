@@ -13,10 +13,10 @@ CONVEX_CONTACT, RENDERER); history in `~/Brain/kinestride/notes/2026-10-03-gpu-b
 ```
 gpu-wait run --priority 90 --timeout 1200 -- kinestride/check.sh step        # parity vs MuJoCo
 gpu-wait run --priority 90 --timeout 1200 -- env BODY=path.xml kinestride/check.sh actuated
-.venv/bin/python -m kinestride.live check                                     # live view self-test
-gpu-wait run ... -- .venv/bin/python -m kinestride.live watch 10 [cube] [spider]   # watch, K=10 steps/frame
-gpu-wait run ... -- .venv/bin/python -m kinestride.live fps 10 [world]        # ms per frame
-gpu-wait run ... -- .venv/bin/python -m kinestride.live watch 10 world-game   # spider + follow camera + game bars + plume text and mini-map, fps printed (fps: same command, 300 frames)
+(fly-connectome) .venv/bin/python -m agent.body_engine.live check                                     # live view self-test
+gpu-wait run ... -- (fly-connectome) .venv/bin/python -m agent.body_engine.live watch 10 [cube] [spider]   # watch, K=10 steps/frame
+gpu-wait run ... -- (fly-connectome) .venv/bin/python -m agent.body_engine.live fps 10 [world]        # ms per frame
+gpu-wait run ... -- (fly-connectome) .venv/bin/python -m agent.body_engine.live watch 10 world-game   # spider + follow camera + game bars + plume text and mini-map, fps printed (fps: same command, 300 frames)
 kinestride/bench.sh build MJCF [STAGE]; gpu-wait run ... -- kinestride/bench.sh run MJCF [STAGE]
 ```
 
