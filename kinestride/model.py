@@ -1427,7 +1427,7 @@ def tendon_dense(s, want, q, v, count, show=True):
     print('wrapped paths: ' + ', '.join(f"{mujoco.mj_id2name(s, mujoco.mjtObj.mjOBJ_TENDON, i)} bent in {b}/{count} states" for i, b in bent.items()))
 
 
-def reference_fresh(m, fn, fields, qpos, qvel=None, ctrl=None):
+def reference_fresh(m, fn, fields, qpos, qvel=None, ctrl=None, xfrc=None):
     """mj_oracle.reference with a fresh MjData per state. One shared MjData carries qacc_warmstart from the previous state's step:
     harmless when the solver converges (Newton), but PGS stops unconverged at 100 sweeps, so its result depends on the warmstart
     and the engine's K=0 launch (warmstart 0) must be compared with a state that has none."""
@@ -1438,6 +1438,8 @@ def reference_fresh(m, fn, fields, qpos, qvel=None, ctrl=None):
         d.qpos[:] = row
         d.qvel[:] = 0 if qvel is None else qvel[n]
         d.ctrl[:] = 0 if ctrl is None else ctrl[n]
+        if xfrc is not None:  # MuJoCo xfrc_applied (nbody x 6: force, torque at xipos)
+            d.xfrc_applied[:] = xfrc[n]
         for call in calls:
             call(m, d)
         for f in fields:
@@ -1488,7 +1490,20 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
         mq = m.body_quat[b][None] + spread * 0.2 * rng.normal(size=(count, m.nmocap, 4))
         mq *= rng.uniform(0.9, 1.1, (count, m.nmocap, 1)) / np.linalg.norm(mq, axis=2, keepdims=True)
         u = np.concatenate([u, np.concatenate([mp, mq], axis=2).reshape(count, -1)], axis=1)
-    u.astype(np.float32).T.copy().tofile(out / 'ctrl.bin')  # (nu + 7 nmocap, flies); zeros below the actuated stage
+    ub = u  # ctrl.bin rows; the oracle's ctrl stays u
+    nxf = int(os.environ.get('XFRC', 0))  # XFRC=k: k random (body, force 3, torque 3) slots per state, ctrl.bin rows after the mocap rows (-DNXF)
+    if nxf:
+        rng = np.random.default_rng(4)
+        xb = rng.integers(1, m.nbody, (count, nxf))
+        fs = float(np.abs(m.opt.gravity).max() * m.body_subtreemass[1])  # forces of the order of the first tree's weight, torques that times its size
+        ts = fs * float(m.stat.meansize)
+        xw = (rng.uniform(-1, 1, (count, nxf, 6)) * np.array([fs] * 3 + [ts] * 3)).astype(np.float32).astype(np.float64)  # float32-exact: no input-rounding floor
+        X = np.zeros((count, m.nbody, 6))
+        for n in range(count):
+            np.add.at(X[n], xb[n], xw[n])  # two slots on one body add, as the engine's slots do
+        ub = np.concatenate([u, np.concatenate([xb[..., None], xw], axis=2).reshape(count, -1)], axis=1)
+        ref = lambda *a, X=X: reference_fresh(*a, xfrc=X)
+    ub.astype(np.float32).T.copy().tofile(out / 'ctrl.bin')  # (nu + 7 nmocap + 7 nxf, flies); zeros below the actuated stage
     if feet:  # only the exported pairs collide; actuators off below S3
         s = load(oracle or mjcf)
         if stage in ('contact', 'equality'):
@@ -1610,7 +1625,7 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     q.astype(np.float32).T.copy().tofile(out / 'qpos.bin')  # (nq, flies): flies fastest, as the engine reads it
     v.astype(np.float32).T.copy().tofile(out / 'qvel.bin')  # (nv, flies)
     binary = out / f'{stage}_{count}'
-    flags = (out / 'sizes.txt').read_text().split()
+    flags = (out / 'sizes.txt').read_text().split() + ([f'-DNXF={nxf}'] if nxf else [])
     subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', *flags, f'-DFLIES={count}', f'-DSTAGE={number}', f'-DK={k}', f"-DWAVE={os.environ.get('WAVE', 0)}", f"-DDUMP={os.environ.get('DUMP', 0)}", f"-DCPU={os.environ.get('CPU', 0)}", *os.environ.get('MOJO_DEFS', '').split(), str(ENGINE / 'smooth.mojo'), '-o', str(binary)], check=True)
     if os.environ.get('BUILD_ONLY'):  # tools/check_all.sh phase 1: export and build on the CPU, run nothing
         print(f'built {binary}')

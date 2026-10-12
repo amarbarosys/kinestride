@@ -185,6 +185,25 @@ if [ "$stage" = cross ]; then  # coupling across two trees in one model (sphere 
   [ $fail -eq 0 ] || { echo "FAIL $fail cross checks"; exit 1; }
   echo "PASS all cross checks"; exit 0
 fi
+if [ "$stage" = xfrc ]; then  # MuJoCo xfrc_applied (mj_xfrcAccumulate): 4 random sparse wrench slots per state (ctrl.bin rows after
+  # the mocap rows, -DNXF) vs mj_step with d.xfrc_applied: fly actuated (contacts, servos), spider step, a push across trees
+  F=.work/assets/fly/body.xml; W=kinestride/models/cross_world.xml
+  XFRC=4 $M -m kinestride.model check $F $X/xfrc/fly actuated 64 || { echo "FAIL xfrc fly"; fail=$((fail+1)); }
+  XFRC=4 $M -m kinestride.model check kinestride/models/spider_test.xml $X/xfrc/spider step 64 || { echo "FAIL xfrc spider"; fail=$((fail+1)); }
+  XFRC=4 CONVEX=1 STONES=1 NEAR_STATES=1 $M -m kinestride.model check $W $X/xfrc/cross equality 64 || { echo "FAIL xfrc cross"; fail=$((fail+1)); }
+  S=kinestride/smooth.mojo
+  # the gate must fail with: the push not applied (today's behaviour), the force sign flipped, the point term
+  # (xipos - subtree_com) x force sign flipped, the point at xpos instead of xipos
+  for mut in \
+    's/^            xfrc(mi, ctrl, res, f)$/            pass/' \
+    's/var fo = V3(ctrl\[(row + 1)/var fo = -V3(ctrl[(row + 1)/' \
+    's/+ cross(off, fo)$/- cross(off, fo)/' \
+    '/var off = V3(get(res, f, OXI/s/OXI + 3 \* (b - 1)/3 * (b - 1)/g'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- env XFRC=4 $M -m kinestride.model check kinestride/models/spider_test.xml $X/xfrc/mutant step 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail xfrc checks"; exit 1; }
+  echo "PASS all xfrc checks"; exit 0
+fi
 if [ "$stage" = mocap ]; then  # two mocap bodies (random mocap_pos/quat per state, quats unnormalised) welded/connected to the animal
   E=kinestride/models/eq_mocap.xml
   $M -m kinestride.model check $E $X/mocap mocap 64 || { echo "FAIL mocap"; fail=$((fail+1)); }
