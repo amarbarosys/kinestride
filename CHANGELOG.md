@@ -2,6 +2,7 @@
 
 Full notes in `docs/releases/`. Newest first. Format: `~/iTools/dev/release-note/TEMPLATE.md`.
 
+- [v0.11.0](docs/releases/v0.11.0.md) (2026-10-12): motion dataset driver (own clip, push, real fall per animal), per-animal eq_active
 - [v0.10.0](docs/releases/v0.10.0.md) (2026-10-12): one canonical body for any mocap skeleton, spike repair, limb planting
 - [v0.9.0](docs/releases/v0.9.0.md) (2026-10-12): watch any body live: Viewer and view.mojo (check.sh view)
 - [v0.8.0](docs/releases/v0.8.0.md) (2026-10-12): mocap clips drive a physics character (bvh, track, motion metrics)
