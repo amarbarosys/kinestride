@@ -20,7 +20,7 @@ tendon/flex equalities, coupling across two trees outside Newton + pyramidal + E
 | contacts | plane and heightfield vs mesh; sphere, capsule, ellipsoid, cylinder; box and convex meshes (GJK + EPA, multi-contact); automatic body-body pairs; pyramidal and elliptic cones; noslip |
 | constraints | Newton (default), CG, PGS; connect, weld, joint equalities; joint and tendon limits; standard and direct solref; pairs, tendons and equalities across trees |
 | actuators | joint servos, fixed and spatial tendons, adhesion |
-| more | fluid forces, per-body sleep, mocap bodies, a game layer (energy, health, stamina), a ray-marching renderer with eye cameras |
+| more | push input (xfrc_applied), fluid forces, per-body sleep, mocap bodies, a game layer (energy, health, stamina), a ray-marching renderer with eye cameras |
 
 ## The step is limited by memory bandwidth, not arithmetic
 
@@ -53,7 +53,7 @@ the first consumer: its connectome brains, live viewer and game scenes drive Kin
 The live viewer still lives in fly-connectome, because it compiles the brain kernels in; making its controller
 pluggable is the next step toward game use. The engine has only run on gfx1100.
 
-Reference: `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/ENGINE_OPT.md` (performance history),
+Reference: `docs/API.md` (the stable surface: files, rows, step), `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/ENGINE_OPT.md` (performance history),
 `docs/RENDERER.md`, `docs/HFIELD_CONTACT.md`, port queue `kinestride/port_queue.tsv`. License notes: `NOTICE`.
 
 Port routine (porting a MuJoCo stage, gates, timing): skill `.claude/skills/body-engine/SKILL.md`.
