@@ -244,14 +244,14 @@ if [ "$stage" = meshmesh ]; then  # mesh-mesh contact (mjc_Convex, margin > 0: o
   echo "PASS all meshmesh checks"; exit 0
 fi
 if [ "$stage" = view ]; then  # viewer.mojo + view.mojo (the live loop with no brain) vs smooth.mojo and render.mojo byte for byte:
-  # the state after 10 one-step launches equals smooth's after one 10-step launch, the first frame equals render on the start pose
+  # the state after 120 one-step launches equals smooth's after one 120-step launch, the frame equals render on that pose
   V="$M -m kinestride.view_check"
-  $V build 10 > $X/viewchk.log 2>&1 || { echo "FAIL view build: $X/viewchk.log"; fail=$((fail+1)); }
-  $V run 10 || { echo "FAIL view"; fail=$((fail+1)); }
+  $V build 120 > $X/viewchk.log 2>&1 || { echo "FAIL view build: $X/viewchk.log"; fail=$((fail+1)); }
+  $V run 120 || { echo "FAIL view"; fail=$((fail+1)); }
   # the gate must fail with: the camera never uploaded (frame), the ctrl never uploaded (state)
   for mut in 's/        ctx.enqueue_copy(self.cam_b, self.camh.unsafe_ptr())/        pass/' \
              's/        ctx.enqueue_copy(self.u_b, self.uv.unsafe_ptr().unsafe_bitcast\[Float32\]())/        pass/'; do
-    ~/iTools/bin/mutant-check kinestride/viewer.mojo "$mut" -- bash -c "$V build 10 > /dev/null 2>&1 && $V run 10" || fail=$((fail+1))
+    ~/iTools/bin/mutant-check kinestride/viewer.mojo "$mut" -- bash -c "$V build 120 > /dev/null 2>&1 && $V run 120" || fail=$((fail+1))
   done
   [ $fail -eq 0 ] || { echo "FAIL $fail view checks"; exit 1; }
   echo "PASS all view checks"; exit 0
