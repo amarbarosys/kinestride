@@ -189,6 +189,18 @@ def terrain(mjcf, params=(0.1, 0.05, 0, 8.0, 0, 0, 2.0, 0.5), n=257, half=40.0):
     return out
 
 
+def shifted(mjcf, out, dx):
+    """Copy mjcf to out with dx added to the x of every direct child of the worldbody (relative data: weld relpose,
+    connect anchors, joint coefs, all unaffected by construction); returns the new path."""
+    spec = mujoco.MjSpec.from_file(str(mjcf))
+    for b in spec.worldbody.bodies:
+        b.pos[0] += dx
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(spec.to_xml())
+    return str(out)
+
+
 def combine(fly, spider, offset=(8.0, 0.0, 0.0), name='world'):
     """Fly and spider in one model (one export, one engine binary): the spider's spec attached at `offset` with prefix
     sp_ (MjSpec.attach copies its assets, actuators and pairs), its own ground removed and its pairs retargeted to the
@@ -446,7 +458,7 @@ def spatial(m):
     tendons(): ints per wrap its type (mjtWrap), its body (site: the site's; sphere, cylinder: the geom's) and its sidesite's body
     (-1: none), then per tendon the body whose floating origin frames the whole path; floats per wrap 11: local position (site or
     geom), local quaternion (geom), radius, sidesite local position. Pulley divisors, sidesite ids and the fixed tendons' coefs are
-    already in tendons()' wrap_prm. Refused: a path across two animals (one floating origin per animal)."""
+    already in tendons()' wrap_prm. A path may join two trees: every point and root com is moved into the frame of moving[0]'s tree."""
     W = mujoco.mjtWrap
     if not m.ntendon or (m.wrap_type == W.mjWRAP_JOINT).all():
         return None
@@ -467,8 +479,6 @@ def spatial(m):
         ws = range(m.tendon_adr[i], m.tendon_adr[i] + m.tendon_num[i])
         bs = [int(b) for w in ws for b in (body[w], side[w]) if b >= 0 and m.wrap_type[w] != W.mjWRAP_JOINT]
         moving = [b for b in bs if any(m.body_dofnum[a] for a in _ancestors(m, b))]
-        if len({m.body_rootid[b] for b in moving}) > 1:
-            raise SystemExit(f'FAIL export: tendon {i} joins two animals (one floating origin per animal)')
         frame.append(moving[0] if moving else 0)
     return np.concatenate([m.wrap_type, body, side, frame]), fl.ravel(), {'SPATIAL': 1}
 
@@ -479,6 +489,62 @@ def _ancestors(m, b):
     while b > 0:
         out.append(b)
         b = m.body_parentid[b]
+    return out
+
+
+def cross_trees(m, regex, convex):
+    """Couplings across two moving trees the export would carry: pairs, equalities and tendons whose moving bodies
+    span more than one body_rootid. A body is moving when an ancestor carries a dof."""
+    def moving(b):
+        return any(m.body_dofnum[a] > 0 for a in _ancestors(m, b))
+    out = []
+    if regex is not None:
+        for p in pairs(m, regex, convex)[0]:
+            g1, g2 = pair_geoms(m, p)
+            b1, b2 = int(m.geom_bodyid[g1]), int(m.geom_bodyid[g2])
+            if moving(b1) and moving(b2) and m.body_rootid[b1] != m.body_rootid[b2]:
+                out.append(f'pair {p}')
+    E, O = mujoco.mjtEq, mujoco.mjtObj
+    for i in range(m.neq):
+        if not m.eq_active0[i]:
+            continue
+        t = int(m.eq_type[i])
+        if t in (E.mjEQ_CONNECT, E.mjEQ_WELD):
+            if m.eq_objtype[i] == O.mjOBJ_SITE:
+                b1, b2 = int(m.site_bodyid[m.eq_obj1id[i]]), int(m.site_bodyid[m.eq_obj2id[i]])
+            else:
+                b1, b2 = int(m.eq_obj1id[i]), int(m.eq_obj2id[i])
+            if moving(b1) and moving(b2) and m.body_rootid[b1] != m.body_rootid[b2]:
+                out.append(f'equality {i}')
+        elif t == E.mjEQ_JOINT:
+            j1, j2 = int(m.eq_obj1id[i]), int(m.eq_obj2id[i])
+            if j2 < 0:
+                continue
+            b1, b2 = int(m.jnt_bodyid[j1]), int(m.jnt_bodyid[j2])
+            if moving(b1) and moving(b2) and m.body_rootid[b1] != m.body_rootid[b2]:
+                out.append(f'equality {i}')
+    W = mujoco.mjtWrap
+    for i in range(m.ntendon):
+        roots = set()
+        for w in range(m.tendon_adr[i], m.tendon_adr[i] + m.tendon_num[i]):
+            t, o = m.wrap_type[w], int(m.wrap_objid[w])
+            if t == W.mjWRAP_PULLEY:
+                continue
+            bodies = []
+            if t == W.mjWRAP_JOINT:
+                bodies.append(int(m.jnt_bodyid[o]))
+            elif t == W.mjWRAP_SITE:
+                bodies.append(int(m.site_bodyid[o]))
+            elif t in (W.mjWRAP_SPHERE, W.mjWRAP_CYLINDER):
+                bodies.append(int(m.geom_bodyid[o]))
+                sid = int(round(m.wrap_prm[w]))
+                if sid >= 0:
+                    bodies.append(int(m.site_bodyid[sid]))
+            for b in bodies:
+                if moving(b):
+                    roots.add(int(m.body_rootid[b]))
+        if len(roots) > 1:
+            out.append(f'tendon {i}')
     return out
 
 
@@ -559,8 +625,6 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
             b = m.body_parentid[b]
         return c
     two = [(anc(m.geom_bodyid[pair_geoms(m, i)[0]]), anc(m.geom_bodyid[pair_geoms(m, i)[1]])) for i in sel]
-    if any(m.body_rootid[m.geom_bodyid[pair_geoms(m, i)[0]]] not in (0, m.body_rootid[m.geom_bodyid[pair_geoms(m, i)[1]]]) for i in sel):
-        raise SystemExit('FAIL export: a pair across two animals (Jacobian about one root only)')
     hrow = hpattern(m, [a ^ b for a, b in two] + list(couple))
     if hrows is not None:
         hrows.append(hrow)
@@ -667,9 +731,6 @@ def eq_rows(m, limits=True):
                 a0, a1, s0, s1 = d[0:3], d[3:6], [1, 0, 0, 0], [1, 0, 0, 0]
             else:
                 a0, a1, s0, s1 = d[3:6], d[0:3], d[6:10], [1, 0, 0, 0]
-            r0, r1 = m.body_rootid[b0], m.body_rootid[b1]
-            if anc(b0) and anc(b1) and r0 != r1:
-                raise SystemExit(f'FAIL export: equality {i} joins two animals (one floating origin per animal)')
             e |= dict(b=[int(b0), int(b1)], size=3 if t == E.mjEQ_CONNECT else 6, union=anc(b0) | anc(b1), a=[*a0, *a1], s=[*s0, *s1],
                       ts=float(d[10]), invw=[m.body_invweight0[b0, 0] + m.body_invweight0[b1, 0], m.body_invweight0[b0, 1] + m.body_invweight0[b1, 1]],
                       in0=anc(b0), in1=anc(b1), dof=[int(b0 if anc(b0) else b1), -1])  # dof 0: the body whose floating origin frames both anchors
@@ -1083,6 +1144,11 @@ def actuators(m):
 
 def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits=None):
     m, out = load(mjcf), Path(out)
+    cross = cross_trees(m, regex, convex)
+    if cross and (m.opt.integrator != mujoco.mjtIntegrator.mjINT_EULER
+                  or m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON
+                  or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL):
+        raise SystemExit(f"FAIL export: coupling across two trees ({', '.join(cross[:3])}) is gated with the Newton solver, the pyramidal cone and the Euler integrator only (check.sh cross)")
     out.mkdir(parents=True, exist_ok=True)
     ints = [getattr(m, f).ravel() for f in INTS]
     floats = [np.ravel(getattr(m.opt, f[4:]) if f.startswith('opt.') else getattr(m, f)) for f in FLOATS]
@@ -1388,6 +1454,8 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     fx = FLOOR_X_CONE if load(mjcf).opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC else FLOOR_X
     m, out = export(mjcf, out, FEET if feet else None, stage in ('actuated', 'sptendon_act'), convex, hfexact, True if stage == 'joint_limit' else None), Path(out)
     number, fn, fields = STAGES[stage]
+    if spatial(m) and not set(TENDON_FIELDS) <= set(fields):  # SPATIAL binaries always append ten_length, ten_velocity, ten_J (smooth.mojo OTLEN): compare them
+        fields = fields + TENDON_FIELDS
     ref = reference if m.opt.solver == mujoco.mjtSolver.mjSOL_NEWTON else reference_fresh  # see reference_fresh
     near = (stage in ('equality', 'mocap', 'tendon_limit', 'joint_limit') and os.environ.get('EQSPREAD') != 'far') or bool(os.environ.get('NEAR_STATES'))  # NEAR_STATES=1: nearby() poses for any stage (flight contacts at rest)
     far = not near
@@ -1438,12 +1506,16 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
         switch = np.zeros(count)  # per state: the constraint row nearest its active-set switch, |J qacc - aref| / max |aref|
         live = [i for i in range(s.npair) if s.pair_margin[i] > -1 and s.geom_type[s.pair_geom1[i]] == mujoco.mjtGeom.mjGEOM_PLANE]
         noslip, s.opt.noslip_iterations = s.opt.noslip_iterations, 0  # switch: Newton's qacc (noslip moves it off the switch)
+        def moving(b):
+            return any(s.body_dofnum[a] > 0 for a in _ancestors(s, b))
         nconv = np.zeros(count, int)  # DIAG: contacts of box or ellipsoid geoms per state
+        ncross = np.zeros(count, int)  # DIAG: contacts whose two geoms sit in different moving trees
         for n in range(count):
             d.qpos[:], d.qvel[:], d.ctrl[:] = q[n], v[n], u[n]
             mujoco.mj_forward(s, d)
             want['ncon'][n] = sum(c.efc_address >= 0 for c in d.contact[:d.ncon])
             nconv[n] = sum(c.efc_address >= 0 and s.geom_type[c.geom1] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID, mujoco.mjtGeom.mjGEOM_SPHERE, mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER) for c in d.contact[:d.ncon])  # convex-block shapes (stones, walls, flight primitives)
+            ncross[n] = sum(c.efc_address >= 0 and s.body_rootid[s.geom_bodyid[c.geom1]] != s.body_rootid[s.geom_bodyid[c.geom2]] and moving(s.geom_bodyid[c.geom1]) and moving(s.geom_bodyid[c.geom2]) for c in d.contact[:d.ncon])
             jar = np.zeros(d.nefc)
             mujoco.mj_mulJacVec(s, d, jar, d.qacc)
             switch[n] = (np.abs(jar - d.efc_aref)[d.ne:].min() / max(np.abs(d.efc_aref).max(), 1e-30)) if d.nefc > d.ne and fx == FLOOR_X else 1.0  # equality rows never switch; pyramidal rows only: a cone has no row to switch
@@ -1456,6 +1528,11 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
         if convex:  # the gate must meet convex contacts: no vacuous pass on states that touch no stone or wall
             ok, need = int((nconv > 0).sum()), int(os.environ.get('CONVEX_MIN', count // 4))
             print(f"{'PASS' if ok >= need else 'FAIL'} convex contacts present in {ok}/{count} states (at least {need})")
+            if ok < need:
+                sys.exit(1)
+        if os.environ.get('CROSS_MIN'):  # the cross gate must meet cross-tree contacts (a world or one-tree pair would pass vacuously)
+            ok, need = int((ncross > 0).sum()), int(os.environ['CROSS_MIN'])
+            print(f"{'PASS' if ok >= need else 'FAIL'} cross-tree contacts present in {ok}/{count} states (at least {need})")
             if ok < need:
                 sys.exit(1)
         # float32 floor: MuJoCo on the float32-rounded state (the engine's actual input) vs MuJoCo on the float64 state.

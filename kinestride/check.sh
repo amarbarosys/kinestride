@@ -158,6 +158,33 @@ if [ "$stage" = equality ] || [ "$stage" = equality_contact ]; then  # connect, 
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all $stage checks"; exit 0
 fi
+if [ "$stage" = cross ]; then  # coupling across two trees in one model (sphere and capsule pairs, connect/weld/joint
+  # equalities, spatial + fixed tendons and a tendon limit) vs mj_step, at two placements
+  W0=$X/cross/w0.xml
+  for dx in 0 2; do
+    WX=$X/cross/w$dx.xml
+    $M -c "from kinestride.model import shifted; print(shifted('kinestride/models/cross_world.xml', '$WX', $dx))" || { echo "FAIL cross shift $dx"; fail=$((fail+1)); }
+    CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $WX $X/cross/e$dx equality 64 || { echo "FAIL cross equality $dx"; fail=$((fail+1)); }
+    $M -m kinestride.model check $WX $X/cross/t$dx tendon_limit 64 || { echo "FAIL cross tendon $dx"; fail=$((fail+1)); }
+  done
+  S=kinestride/smooth.mojo
+  # the gate must fail with: geom1's side using geom2's root com; the cross-tree shift dropped in the sphere and convex
+  # pairs; the frame shift dropped in equality's sh1; the tree shift dropped in tjac and tpoint
+  for mut in \
+    's/var off1 = cpos - com1/var off1 = cpos - com/' \
+    's/^                pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/                pos1 = pos1/' \
+    's/^        pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/        pos1 = pos1/' \
+    's/var sh1 = o1 - frame/var sh1 = V3(0)/'; do
+    CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $W0 $X/cross/mutant equality 64 || fail=$((fail+1))
+  done
+  for mut in \
+    's/0) + (origin(mi, qpos, f, bi) - frame)/0)/' \
+    's/b\[0\] + (origin(mi, qpos, f, bi) - frame)/b[0]/'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $W0 $X/cross/mutant tendon_limit 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail cross checks"; exit 1; }
+  echo "PASS all cross checks"; exit 0
+fi
 if [ "$stage" = mocap ]; then  # two mocap bodies (random mocap_pos/quat per state, quats unnormalised) welded/connected to the animal
   E=kinestride/models/eq_mocap.xml
   $M -m kinestride.model check $E $X/mocap mocap 64 || { echo "FAIL mocap"; fail=$((fail+1)); }
