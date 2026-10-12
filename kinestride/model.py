@@ -128,13 +128,41 @@ def cube(mjcf, side=40.0):
     return str(out)
 
 
+WORLD_DEFAULT = (0.0, 0.0, 0.3, 8.0, 4, 1, 2.0, 0.5, 0.0, 40.0, 5.0, 40.0, 0, 0, 0, 0)  # world.mojo's 16 params (world.py,
+# the oracle, holds the same): slope x y, amplitude mm, wavelength mm, octaves, seed, lacunarity, gain, landmark density,
+# cell mm, cone radius mm, cone height mm, 4 unused
+_WORLD = []
+
+
+def world_full(p):
+    """Params padded to 16 with WORLD_DEFAULT's tail (landmarks off)."""
+    return tuple(p) + WORLD_DEFAULT[len(p):]
+
+
+def world_height_grad(x, y, p=WORLD_DEFAULT):
+    """(height, dh/dx, dh/dy) of the world.mojo terrain at x, y (any shape, world mm), from its CLI (world IN OUT N);
+    world.py stays the oracle of `python -m kinestride.world diff`."""
+    out = Path('.work/world-mojo')
+    out.mkdir(parents=True, exist_ok=True)
+    if not _WORLD:
+        _WORLD.append(out / 'world')
+        subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('world.mojo')),
+                        '-o', str(_WORLD[0])], check=True)
+    x, y = np.broadcast_arrays(np.asarray(x, np.float32), np.asarray(y, np.float32))
+    src, dst = out / f'in-{os.getpid()}.bin', out / f'out-{os.getpid()}.bin'
+    np.concatenate([np.stack([x.ravel(), y.ravel()], 1).ravel(), np.asarray(world_full(p), np.float32)]).astype(np.float32).tofile(src)
+    subprocess.run([str(_WORLD[0]), str(src), str(dst), str(x.size)], check=True)
+    r = np.fromfile(dst, np.float32).reshape(x.size, 3)
+    return tuple(r[:, i].reshape(x.shape) for i in range(3))
+
+
 def terrain(mjcf, params=(0.1, 0.05, 0, 8.0, 0, 0, 2.0, 0.5), n=257, half=40.0):
-    """Ground plane replaced by the world.py terrain: its 8 params ride in <custom><numeric name="terrain"> (what the
+    """Ground plane replaced by the world.mojo terrain: its 8 params ride in <custom><numeric name="terrain"> (what the
     engine evaluates) and an n x n heightfield of +-half mm samples them (what MuJoCo collides with). Writes
     terrain.xml next to mjcf and, with octaves 0 (a pure ramp), its exact twin terrain_plane.xml: the same tilted
     plane as a plane geom, the oracle of the tilt gate. Returns the paths."""
     import xml.etree.ElementTree as ET
-    from kinestride.world import full, height_grad
+    full, height_grad = world_full, world_height_grad
     xs = np.linspace(-half, half, n)
     X, Y = np.meshgrid(xs, xs)  # row r along +y, column c along +x (mjModel.hfield_data order)
     H = height_grad(X, Y, params)[0].astype(np.float64)

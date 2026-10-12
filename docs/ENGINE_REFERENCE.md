@@ -107,7 +107,8 @@ agent/mcns.py, agent/mcns_mapping.py, agent/verify_mcns.py   MCNS graph, name-ba
 convex.mojo  GJK + EPA + perturbation contacts (MuJoCo engine_collision_gjk.c, mjc_Convex), float32 or -DCCD64=1 float64
 convex_check.py, convex_test.mojo   narrowphase gate vs mj_collision (check.sh convex; the flight twin's primitive pairs and its near-rest poses, check.sh flight_contacts) and its CPU driver; hfield_check.py, hfield_test.mojo   the same for the exact heightfield (check.sh hfield)
 convex_gpu.mojo, convex_bench.sh   narrowphase on the card: ns per pair class, VGPR/scratch/LDS;  row_diag.py   engine contact rows vs MuJoCo's efc rows (DUMP=1 build)
-world.mojo, world.py   terrain function, world MJCFs (planes, cube, ramp)
+world.mojo, world.py   terrain function (model.world_height_grad runs world.mojo's CLI `world IN OUT N`; world.py is the oracle of `python -m kinestride.world diff`), world MJCFs (planes, cube, ramp)
+assets.mojo, assets.py   world-part meshes (icosphere, box and ellipsoid geoms, edge splitter) for model.meshes; assets.py is the oracle of assets_check.py
 world_content.mojo/.py seeded plume descriptor and concentration sampler; check, GPU fixture and scenario TOML
 game_state.mojo, game_events.py, game_state_check.py  compact game state, CPU event replay, standalone gate;  game_check.py  the engine hook's gate (`check.sh game`)
 render.mojo  ray-march renderer on engine poses;  live.mojo, live.py  engine + renderer in one process
