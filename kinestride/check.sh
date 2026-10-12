@@ -47,15 +47,24 @@ if [ "$stage" = motion ]; then  # motion metrics (motion_metrics.mojo, CPU build
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all motion checks"; exit 0
 fi
-if [ "$stage" = bvh ]; then  # BVH -> MJCF + reference clip (bvh.mojo, CPU build): Mojo FK vs numpy FK vs MuJoCo(qref), on the CMU clips (tools/assets.sh)
+if [ "$stage" = bvh ]; then  # BVH -> canonical character + reference clip (bvh.mojo, CPU build): twin retarget, MuJoCo(qref), round trip, on the CMU clips (tools/assets.sh)
   B="mojo build -I kinestride kinestride/bvh.mojo -o $X/bvh/bvh"
   mkdir -p $X/bvh; PATH=$PWD/.venv/bin:$PATH bash -c "$B" || { echo "FAIL bvh build"; exit 1; }
   for c in 10_01 02_05 60_01 55_22; do
     $M -m kinestride.bvh_check $X/bvh/bvh .work/assets/cmu/$c.bvh || { echo "FAIL bvh $c"; fail=$((fail+1)); }
   done
-  for m in 's/q = qmul(q, a)/q = qmul(a, q)/' 's/vec(to_mj(a), 1)/vec(a, 1)/' 's/var e = 1.0 if j == (i + 1) % 3 else -1.0/var e = 1.0/' \
-    's/zs\[(t - 1) \/\/ 10\]/zs[0]/' 's/var mq = qmul(qmul(QC, wq\[j\]), QCI)/var mq = qmul(QC, wq[j])/'; do
-    ~/iTools/bin/mutant-check kinestride/bvh.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$B && $M -m kinestride.bvh_check $X/bvh/bvh .work/assets/cmu/10_01.bvh" || fail=$((fail+1))  # extrinsic Euler, unconverted axes, Tait-Bryan sign, min floor, half conjugation
+  # extrinsic Euler, half conjugation into the MuJoCo frame, Tait-Bryan sign, left arm from the right, rest correction
+  # dropped, root unscaled, chain re-aim dropped, clip not grounded, contact floor at the clip minimum, spike judged on one neighbour,
+  # knee bent the other way, end orientation not kept, contact runs not joined, no fade after a run
+  for m in 's/q = qmul(q, a)/q = qmul(a, q)/' 's/rots.append(qmul(qmul(QC, q), conj(QC)))/rots.append(qmul(QC, q))/' \
+    's/var e = 1.0 if j == (i + 1) % 3 else -1.0/var e = 1.0/' 's/"LeftShoulder", "LeftArm"/"LeftShoulder", "RightArm"/' \
+    's/r.append(rmin(unit(tip\[b\]), unit(d)))/r.append(Q(1, 0, 0, 0))/' 's/cp\[b\] = swp\[smap\[0\]\] \* ratio if/cp[b] = swp[smap[0]] if/' \
+    's/if b > 0 and main\[b\] >= 0:/if False:/' 's/c.root\[f\]\[3\] += lift/c.root[f][3] += 0/' 's/var zlow = zs\[(t - 1) \/\/ 10\]/var zlow = zs[0]/' \
+    's/if angle(a, m) > lim and angle(m, b) > lim and angle(a, b) <= lim:/if angle(a, m) > lim:/' \
+    's/var side = Q(0, ud\[2\]/var side = -Q(0, ud[2]/' 's/= qmul(conj(wl), wqp.unsafe_offset(g \* NB + e)\[\])/= rp.unsafe_offset(g * NB + e)[]/' \
+    's/f - edges\[len(edges) - 1\] <= 2 \* blend/f - edges[len(edges) - 1] <= 0/' \
+    's/delta\[li \* t + g\] += delta\[li \* t + g - k\] \*/delta[li * t + g] += 0 * delta[li * t + g - k] */'; do
+    ~/iTools/bin/mutant-check kinestride/bvh.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$B && $M -m kinestride.bvh_check $X/bvh/bvh .work/assets/cmu/10_01.bvh" || fail=$((fail+1))
   done
   PATH=$PWD/.venv/bin:$PATH bash -c "$B"  # leave the real binary, not the last mutant's
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
@@ -64,7 +73,7 @@ fi
 if [ "$stage" = track ]; then  # unit B: the tracking loop (track.mojo, 64 animals, K=4) vs the same loop in MuJoCo on CMU 10_01, both scored vs the reference
   T=$X/track; mkdir -p $T $X/bvh $X/motion; export PATH=$PWD/.venv/bin:$PATH
   mojo build -I kinestride kinestride/bvh.mojo -o $X/bvh/bvh && mojo build -I kinestride kinestride/motion_metrics.mojo -o $X/motion/motion_metrics || { echo "FAIL track tools build"; exit 1; }
-  R="$X/bvh/bvh mjcf .work/assets/cmu/10_01.bvh $T/10_01.xml > /dev/null && $X/bvh/bvh clip .work/assets/cmu/10_01.bvh $T/10_01 > /dev/null \
+  R="$X/bvh/bvh mjcf $T/10_01.xml > /dev/null && $X/bvh/bvh clip .work/assets/cmu/10_01.bvh $T/10_01 > /dev/null \
     && $M -m kinestride.track_check prepare $T/10_01 $T/ 64 > $T/prepare.log 2>&1 \
     && ~/iTools/bin/mojo-cached build \$(cat $T/sizes.txt) -DFLIES=64 -DSTAGE=7 -DK=4 -I kinestride kinestride/track.mojo -o $T/track > $T/build.log 2>&1 \
     && $T/track $T/ $T/10_01 && $M -m kinestride.track_check mujoco $T/10_01 && $M -m kinestride.track_check gate $T/10_01 $X/motion/motion_metrics"
