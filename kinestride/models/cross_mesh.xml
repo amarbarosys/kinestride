@@ -1,0 +1,39 @@
+<mujoco model="cross_mesh">
+  <!-- Mesh-mesh contact across two moving trees (check.sh meshmesh): irregular convex hulls defined inline (no assets),
+       pairs ha1-hb and ha-hb1 between the trees, MuJoCo's mjc_Convex with the perturbation search (up to 5 contacts per
+       pair). Irregular on purpose: parallel faces make the EPA direction tolerance-arbitrary. The always-active weld A-B
+       keeps both trees one MuJoCo island in every state (MuJoCo solves per island, the engine one block). -->
+  <option timestep="0.002" gravity="0 0 -9.81" noslip_iterations="5"/>
+  <default><geom contype="0" conaffinity="0" density="1000"/><joint damping="0.05" armature="0.001"/></default>
+  <asset>
+    <mesh name="hexa" vertex="-0.031 -0.028 -0.026  0.033 -0.030 -0.024  0.029 0.034 -0.027  -0.027 0.031 -0.029
+                              -0.030 -0.026 0.032  0.028 -0.033 0.030  0.032 0.027 0.034  -0.034 0.029 0.026"/>
+    <mesh name="octa" vertex="0.041 0.003 -0.002  -0.038 -0.004 0.003  0.002 0.036 0.004  -0.003 -0.043 -0.001
+                              0.004 -0.002 0.039  -0.001 0.005 -0.044"/>
+  </asset>
+  <worldbody>
+    <body name="A" pos="0 0 0.3">
+      <freejoint/>
+      <geom name="ha" type="mesh" mesh="hexa"/>
+      <body name="A1" pos="0 0 -0.08">
+        <joint name="ja1" type="hinge" axis="0 1 0"/>
+        <geom name="ha1" type="mesh" mesh="octa"/>
+      </body>
+    </body>
+    <body name="B" pos="0.07 0 0.22">
+      <freejoint/>
+      <geom name="hb" type="mesh" mesh="hexa" euler="0.3 0.2 0.1"/>
+      <body name="B1" pos="0 0 0.08">
+        <joint name="jb1" type="hinge" axis="1 0 0"/>
+        <geom name="hb1" type="mesh" mesh="octa" euler="0.2 -0.3 0.4"/>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <pair geom1="ha1" geom2="hb" condim="3" friction="0.8 0.8 0.005 0.0001 0.0001" margin="0.002"/>
+    <pair geom1="ha" geom2="hb1" condim="3" friction="0.8 0.8 0.005 0.0001 0.0001" margin="0.002"/>
+  </contact>
+  <equality>
+    <weld body1="A" body2="B" torquescale="1.5"/>
+  </equality>
+</mujoco>

@@ -556,7 +556,7 @@ def pairs(m, regex, convex=False):
     G = mujoco.mjtGeom
     ported = {(G.mjGEOM_PLANE, G.mjGEOM_MESH), (G.mjGEOM_HFIELD, G.mjGEOM_MESH), (G.mjGEOM_SPHERE, G.mjGEOM_SPHERE)}
     if convex:
-        ported |= {(G.mjGEOM_BOX, G.mjGEOM_MESH), (G.mjGEOM_ELLIPSOID, G.mjGEOM_MESH)} | {(a, b) for a in PRIM for b in PRIM if int(a) <= int(b)}
+        ported |= {(G.mjGEOM_BOX, G.mjGEOM_MESH), (G.mjGEOM_ELLIPSOID, G.mjGEOM_MESH), (G.mjGEOM_MESH, G.mjGEOM_MESH)} | {(a, b) for a in PRIM for b in PRIM if int(a) <= int(b)}
     kind = lambda i: tuple(G(m.geom_type[g]) for g in pair_geoms(m, i))
     if os.environ.get('KINDS'):  # diagnostics: export only these pair kinds, e.g. KINDS=capsule-cylinder,sphere-capsule
         ported = {k for k in ported if '-'.join(g.name[7:].lower() for g in k) in os.environ['KINDS'].split(',')}
@@ -591,7 +591,7 @@ def hpattern(m, couple):
     return hrow
 
 
-def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
+def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=None):
     """Contact pairs (pairs()): ints, floats and -D sizes for smooth.mojo STAGE 6.
 
     ints   per pair: geom1, geom2, geom2's body, hull vertex count (0: sphere-sphere), hull vertex offset,
@@ -601,7 +601,8 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
            pair's deepest dof, ascending), their Jacobian signs (+1 geom2's body only, -1 geom1's only, 0 both or
            neither), H's pattern (rowadr, rownnz, colind as hpattern()), M's entry -> H's entry, opt.iterations,
            opt.ls_iterations, opt.noslip_iterations
-    couple: extra dof sets that H must couple (equality constraints, eqs()); hrows, if a list, receives H's row patterns
+    couple: extra dof sets that H must couple (equality constraints, eqs()); hrows, if a list, receives H's row patterns;
+    hull_out, if a list, receives the hull table {mesh id: (vertex offset, first-edge offset)} (convex_block: geom1 of a mesh-mesh pair)
     floats per pair: margin, gap, friction 0-1, solref 2, solimp 5, invweight0 translation (both bodies), rbound of
            geom2 and geom1 (14); then hull vertices in the geom frame; then opt.impratio, opt.tolerance, opt.ls_tolerance, opt.noslip_tolerance, stat.meaninertia
     """
@@ -613,6 +614,9 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
     sel, drop = pairs(m, regex, convex)
     if drop:
         print(f'export: {sum(drop.values())} pairs of unported kinds NOT exported: {dict(drop)}')
+    if convex and any(m.geom_type[pair_geoms(m, i)[0]] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_MESH) and m.geom_type[pair_geoms(m, i)[1]] == mujoco.mjtGeom.mjGEOM_MESH
+                      and m.pair_margin[i] + m.pair_gap[i] <= 0 for i in sel):  # mjc_Convex maxContacts: margin 0 takes native polygon clipping
+        raise SystemExit('FAIL export: box-mesh and mesh-mesh pairs need margin > 0 (MuJoCo clips polygons at margin 0; not ported)')
     if any(m.pair_dim[i] not in (1, 3) or m.pair_solimp[i][4] != int(m.pair_solimp[i][4]) for i in sel):
         raise SystemExit('FAIL export: only condim 1 and 3 contacts with a whole solimp power are ported')
     if not convex and any(m.pair_dim[i] == 1 for i in sel):
@@ -636,13 +640,16 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
         b = m.geom_bodyid[g2]
         chain = hrow[max(a1 ^ a2)]
         nv = 0
-        if m.geom_type[g2] == mujoco.mjtGeom.mjGEOM_MESH:
-            mesh = m.geom_dataid[g2]
+        for g in (g2, g1) if m.geom_type[g1] == m.geom_type[g2] == mujoco.mjtGeom.mjGEOM_MESH else (g2,):  # mesh-mesh: geom1's hull too
+            if m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH:
+                continue
+            mesh = m.geom_dataid[g]
             ga = m.mesh_graphadr[mesh]
-            nv = m.mesh_graph[ga]
-            edgeadr = m.mesh_graph[ga + 2:ga + 2 + nv]
-            gid = m.mesh_graph[ga + 2 + nv:ga + 2 + 2 * nv]
-            local = m.mesh_graph[ga + 2 + 2 * nv:]
+            nvg = m.mesh_graph[ga]
+            nv = nv or nvg
+            edgeadr = m.mesh_graph[ga + 2:ga + 2 + nvg]
+            gid = m.mesh_graph[ga + 2 + nvg:ga + 2 + 2 * nvg]
+            local = m.mesh_graph[ga + 2 + 2 * nvg:]
             local = local[:edgeadr.max() + list(local[edgeadr.max():]).index(-1) + 1]  # through the last vertex's -1
             if mesh not in hulls:  # one copy of each hull however many planes it meets (the cube: 6 pairs per part)
                 hulls[mesh] = (len(verts) // 3, len(first))
@@ -650,14 +657,15 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
                 edges += list(local)
                 verts += list(m.mesh_vert[m.mesh_vertadr[mesh] + gid].ravel())
         prim = prim_pair(m, i) if convex else 0
-        ns = (5 if m.geom_type[g1] == mujoco.mjtGeom.mjGEOM_BOX else 1) if m.geom_type[g1] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID) else (3 if nv else 1)
+        meshmesh = convex and m.geom_type[g1] == m.geom_type[g2] == mujoco.mjtGeom.mjGEOM_MESH  # mjc_Convex, perturbation search: up to 5
+        ns = (5 if m.geom_type[g1] == mujoco.mjtGeom.mjGEOM_BOX else 1) if m.geom_type[g1] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID) else (5 if meshmesh else 3 if nv else 1)
         if prim:  # mj_maxContact: capsule-capsule 2 (both ends when parallel); capsule/cylinder pairs up to 5 (mjc_Convex's perturbation search, multiccd); one with a sphere or ellipsoid
             G_ = mujoco.mjtGeom
             ns = 2 if prim == 5 else (5 if prim == 4 and {G_(m.geom_type[g1]), G_(m.geom_type[g2])} <= {G_.mjGEOM_CAPSULE, G_.mjGEOM_CYLINDER} else 1)
         if hfexact and m.geom_type[g1] == mujoco.mjtGeom.mjGEOM_HFIELD:
             ns = HF_SLOTS  # one contact per cell-triangle prism under the mesh (MuJoCo keeps up to 50)
         G = mujoco.mjtGeom
-        pooled = (convex and m.geom_type[g1] in (G.mjGEOM_BOX, G.mjGEOM_ELLIPSOID) and m.geom_type[g2] == G.mjGEOM_MESH) or (hfexact and m.geom_type[g1] == G.mjGEOM_HFIELD) or bool(prim)
+        pooled = (convex and m.geom_type[g1] in (G.mjGEOM_BOX, G.mjGEOM_ELLIPSOID, G.mjGEOM_MESH) and m.geom_type[g2] == G.mjGEOM_MESH) or (hfexact and m.geom_type[g1] == G.mjGEOM_HFIELD) or bool(prim)
         if pooled:  # convex.mojo pairs take slots from the animal's pool each step: no static slots, the record's ns is the cap
             head += [g1, g2, b, nv, *(hulls[m.geom_dataid[g2]] if nv else (0, 0)), len(chain), len(chains), 0, ns, 0]
             pool[2 if prim else m.geom_type[g1] == G.mjGEOM_HFIELD] += ns
@@ -670,6 +678,8 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False):
         sr = m.pair_solref[i] if (m.pair_solref[i][0] > 0) == (m.pair_solref[i][1] > 0) else (0.02, 1.0)  # mixed format: MuJoCo's default (getsolparam)
         fl += [m.pair_margin[i], m.pair_gap[i], *m.pair_friction[i][:2], *sr, *m.pair_solimp[i],
                m.body_invweight0[m.geom_bodyid[g1], 0] + m.body_invweight0[b, 0], m.geom_rbound[g2], m.geom_rbound[g1]]
+    if hull_out is not None:
+        hull_out.append(hulls)
     hnnz = [len(r) for r in hrow]
     hadr = list(np.cumsum([0] + hnnz[:-1]))
     hcol = [c for r in hrow for c in r]
@@ -1159,14 +1169,14 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
         sizes['SOLVER'] = int(m.opt.solver)
     if limits is None:  # joint limit rows ride the constraint block: exported when the model already has one (contacts, equalities,
         limits = bool(regex) or bool(m.neq) or bool(m.tendon_limited.any())  # tendon limits); contact-free stages below S6 keep none
-    eq, hr = eq_rows(m, limits), []
+    eq, hr, hl = eq_rows(m, limits), [], []
     if regex or eq:  # equality rows ride the solver block: no pairs (regex '^$') still needs it
-        ci, cf, cs = feet(m, regex or '^$', [e['union'] for e in eq], hr, convex, hfexact)
+        ci, cf, cs = feet(m, regex or '^$', [e['union'] for e in eq], hr, convex, hfexact, hl)
         ints, floats, sizes = ints + [ci], floats + [cf], sizes | cs
     if act:
         ai, af = actuators(m)
         ints, floats = ints + [ai], floats + [af]
-    for block in (fluid(m), tendons(m), spatial(m), convex_block(m, regex, convex, hfexact) if regex and (convex or hfexact) else None):  # last, so every earlier block keeps its offsets and a model without them its bytes
+    for block in (fluid(m), tendons(m), spatial(m), convex_block(m, regex, convex, hfexact, hl[0] if hl else None) if regex and (convex or hfexact) else None):  # last, so every earlier block keeps its offsets and a model without them its bytes
         if block:
             ints, floats, sizes = ints + [block[0]], floats + [block[1]], sizes | block[2]
     if eq:  # after the other lanes' blocks too: a model without equalities keeps its bytes
@@ -1182,7 +1192,7 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
     return m
 
 
-def convex_block(m, regex, convex=True, hfexact=False):
+def convex_block(m, regex, convex=True, hfexact=False, hulls=None):
     """Convex pairs for convex.mojo, appended last: ints per exported pair (feet order) the kind (0 plane, sphere or tangent-plane
     heightfield; 1 ellipsoid-mesh one contact; 2 box-mesh up to 5; 3 exact heightfield-mesh, GJK + EPA per cell prism); floats
     opt.ccd_tolerance, the heightfield's size 0-3 and origin z (zeros without one), then per pair geom1's size (0 for the other
@@ -1190,7 +1200,7 @@ def convex_block(m, regex, convex=True, hfexact=False):
     None without convex or exact heightfield pairs."""
     G = mujoco.mjtGeom
     sel, _ = pairs(m, regex, convex)
-    kind = [(prim_pair(m, i) or {G.mjGEOM_ELLIPSOID: 1, G.mjGEOM_BOX: 2}.get(m.geom_type[pair_geoms(m, i)[0]], 0) if m.geom_type[pair_geoms(m, i)[1]] == G.mjGEOM_MESH else prim_pair(m, i)) if convex else 0 for i in sel]
+    kind = [(prim_pair(m, i) or {G.mjGEOM_ELLIPSOID: 1, G.mjGEOM_BOX: 2, G.mjGEOM_MESH: 4}.get(m.geom_type[pair_geoms(m, i)[0]], 0) if m.geom_type[pair_geoms(m, i)[1]] == G.mjGEOM_MESH else prim_pair(m, i)) if convex else 0 for i in sel]
     if any(m.pair_dim[i] not in (1, 3) for i in sel):
         raise SystemExit('FAIL export: pair condim 4 and 6 are not ported (1 and 3 are)')
     if m.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC and any(m.pair_dim[i] == 1 for i in sel):
@@ -1211,7 +1221,11 @@ def convex_block(m, regex, convex=True, hfexact=False):
     size = [m.geom_size[pair_geoms(m, i)[0]] if k in (1, 2, 4, 5, 6, 7) else np.zeros(3) for i, k in zip(sel, kind)]
     size2 = [m.geom_size[pair_geoms(m, i)[1]] if k in (4, 5, 6, 7) else np.zeros(3) for i, k in zip(sel, kind)]
     shapes = [tuple(SHAPE_KIND.get(G(m.geom_type[g]), 0) for g in pair_geoms(m, i)) for i in sel]
-    return np.array(kind + [c for ab in shapes for c in ab] + [int(m.pair_dim[i]) for i in sel]), np.concatenate([head, *size, *size2]), sizes
+    mm = [m.geom_type[pair_geoms(m, i)[0]] == G.mjGEOM_MESH for i in sel]  # mesh-mesh (kind 4, both shapes MESH): geom1's hull offsets, -DNMM
+    if any(mm):
+        sizes['NMM'] = 1
+    hull1 = [c for i, k in zip(sel, mm) for c in (hulls[m.geom_dataid[pair_geoms(m, i)[0]]] if k else (0, 0))] if any(mm) else []
+    return np.array(kind + [c for ab in shapes for c in ab] + [int(m.pair_dim[i]) for i in sel] + hull1), np.concatenate([head, *size, *size2]), sizes
 
 
 def cube_colour(m, tex, v):
@@ -1529,7 +1543,7 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
             d.qpos[:], d.qvel[:], d.ctrl[:] = q[n], v[n], u[n]
             mujoco.mj_forward(s, d)
             want['ncon'][n] = sum(c.efc_address >= 0 for c in d.contact[:d.ncon])
-            nconv[n] = sum(c.efc_address >= 0 and s.geom_type[c.geom1] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID, mujoco.mjtGeom.mjGEOM_SPHERE, mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER) for c in d.contact[:d.ncon])  # convex-block shapes (stones, walls, flight primitives)
+            nconv[n] = sum(c.efc_address >= 0 and s.geom_type[c.geom1] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID, mujoco.mjtGeom.mjGEOM_SPHERE, mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER, mujoco.mjtGeom.mjGEOM_MESH) for c in d.contact[:d.ncon])  # convex-block shapes (stones, walls, flight primitives, mesh-mesh)
             ncross[n] = sum(c.efc_address >= 0 and s.body_rootid[s.geom_bodyid[c.geom1]] != s.body_rootid[s.geom_bodyid[c.geom2]] and moving(s.geom_bodyid[c.geom1]) and moving(s.geom_bodyid[c.geom2]) for c in d.contact[:d.ncon])
             jar = np.zeros(d.nefc)
             mujoco.mj_mulJacVec(s, d, jar, d.qacc)

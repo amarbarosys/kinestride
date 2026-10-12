@@ -5,7 +5,7 @@ separated, shallow, touching and deep), MuJoCo's contact for exactly that pair a
 count, dist, pos, normal. The CPU driver convex_test.mojo is built float64 (parity with MuJoCo's doubles, bar 1e-9)
 or float32 (the engine; bar measured, stated by the caller).
 
-usage: python -m kinestride.convex_check KIND N [f64|f32] [BAR] [SEED]   KIND: ellipsoid | box (vs mesh, the fly), or a primitive pair of
+usage: python -m kinestride.convex_check KIND N [f64|f32] [BAR] [SEED]   KIND: ellipsoid | box | mesh (vs mesh, the fly; mesh: mesh_pairs()), or a primitive pair of
 the flight twin (FLIGHT_PAIRS, model.with_auto_pairs): capsule-cylinder, capsule-ellipsoid, ellipsoid-ellipsoid, ellipsoid-cylinder, sphere-ellipsoid
 (GJK + EPA, one contact in the driver), capsule-capsule, sphere-capsule, sphere-cylinder (analytic)
 """
@@ -62,6 +62,23 @@ def degenerate(m, g1, g2, row):
     return False
 
 
+def mesh_pairs(n=64, seed=5):
+    """The fly with n explicit pairs between named mesh geoms of different, non-adjacent bodies: the mesh-mesh oracle model."""
+    spec = mujoco.MjSpec.from_file(BODY)
+    m0 = spec.compile()
+    name = lambda g: mujoco.mj_id2name(m0, mujoco.mjtObj.mjOBJ_GEOM, g)
+    gs = [g for g in range(m0.ngeom) if m0.geom_type[g] == G.mjGEOM_MESH and name(g)]
+    rng, seen = np.random.default_rng(seed), set()
+    while len(seen) < n:
+        a, b = (int(x) for x in rng.choice(gs, 2, replace=False))
+        ba, bb = m0.geom_bodyid[a], m0.geom_bodyid[b]
+        if ba != bb and m0.body_parentid[ba] != bb and m0.body_parentid[bb] != ba:
+            seen.add((min(a, b), max(a, b)))
+    for a, b in sorted(seen):
+        spec.add_pair(geomname1=name(a), geomname2=name(b), margin=0.001)  # margin > 0: mjc_Convex's perturbation path, as the fly's pairs
+    return spec.compile()
+
+
 def randrot(rng):
     q = rng.normal(size=4)
     q /= np.linalg.norm(q)
@@ -73,18 +90,18 @@ def randrot(rng):
 def run(kind, n, prec='f64', bar=1e-9, seed=0, mutant=None, verbose=True):
     from kinestride.model import pair_geoms, SHAPE_KIND
     prim = '-' in kind
-    m = mujoco.MjModel.from_xml_path(FLIGHT_PAIRS if prim else BODY)
+    m = mesh_pairs() if kind == 'mesh' else mujoco.MjModel.from_xml_path(FLIGHT_PAIRS if prim else BODY)
     d = mujoco.MjData(m)
     mujoco.mj_forward(m, d)
     if prim:
         ta, tb = (NAMES[x] for x in kind.split('-'))
         sel = [i for i in range(m.npair) if tuple(m.geom_type[g] for g in pair_geoms(m, i)) == (ta, tb)]
     else:
-        want = G.mjGEOM_BOX if kind == 'box' else G.mjGEOM_ELLIPSOID
+        want = {'box': G.mjGEOM_BOX, 'ellipsoid': G.mjGEOM_ELLIPSOID, 'mesh': G.mjGEOM_MESH}[kind]
         sel = [i for i in range(m.npair) if m.geom_type[m.pair_geom1[i]] == want and m.geom_type[m.pair_geom2[i]] == G.mjGEOM_MESH]
     if not sel:
         print(f'FAIL convex {kind}: no such pairs'); return False
-    meshes = sorted({int(m.geom_dataid[m.pair_geom2[i]]) for i in sel if m.geom_type[m.pair_geom2[i]] == G.mjGEOM_MESH})
+    meshes = sorted({int(m.geom_dataid[g]) for i in sel for g in (m.pair_geom1[i], m.pair_geom2[i]) if m.geom_type[g] == G.mjGEOM_MESH})
     hv, hf, he, hm, hidx = hull_tables(m, meshes)
     rng = np.random.default_rng(seed)
     work = Path('.work/convex') / f'{kind}-{prec}'
@@ -106,7 +123,7 @@ def run(kind, n, prec='f64', bar=1e-9, seed=0, mutant=None, verbose=True):
         else:
             pos1 = pos2 + dirn * r * rng.uniform(0.0, 0.9)
         row = cases[c]
-        row[0] = SHAPE_KIND[G(m.geom_type[g1])] if prim else (0 if kind == 'ellipsoid' else 2)
+        row[0] = SHAPE_KIND[G(m.geom_type[g1])] if prim else {'ellipsoid': 0, 'box': 2, 'mesh': 1}[kind]
         row[1] = SHAPE_KIND[G(m.geom_type[g2])] if prim else 1
         row[2:5] = m.geom_size[g1]
         row[33:36] = m.geom_size[g2]
@@ -117,6 +134,7 @@ def run(kind, n, prec='f64', bar=1e-9, seed=0, mutant=None, verbose=True):
         row[17:20] = pos2
         row[20:29] = mat2
         row[29] = hidx[int(m.geom_dataid[g2])] if not prim else 0
+        row[38] = hidx[int(m.geom_dataid[g1])] if kind == 'mesh' else 0  # geom1's hull (mesh-mesh)
         row[30] = m.pair_margin[i] + m.pair_gap[i]
         row[31] = m.opt.ccd_tolerance
         row[32] = min(m.geom_rbound[g1], m.geom_rbound[g2])

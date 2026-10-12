@@ -5,7 +5,7 @@ from std.sys import argv
 from std.memory import UnsafePointer
 from convex import *
 
-comptime CW = 40  # case: kind1 kind2, size1 3, pos1 3, mat1 9, pos2 3, mat2 9, hull, margin, tol, rbound, size2 3 (33), multi (36), analytic kind (37: 5 capsule-capsule, 6 sphere-capsule, 7 sphere-cylinder, else collide)
+comptime CW = 40  # case (38: geom1's hull for mesh-mesh): kind1 kind2, size1 3, pos1 3, mat1 9, pos2 3, mat2 9, hull, margin, tol, rbound, size2 3 (33), multi (36), analytic kind (37: 5 capsule-capsule, 6 sphere-capsule, 7 sphere-cylinder, else collide)
 comptime OW = 36  # out: ncon, then 5 x (dist, pos 3, normal 3)
 
 
@@ -64,6 +64,9 @@ def main() raises:
         var pf = hfirst.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]() + (Int(hmeta[3 * h + 1]) if mesh else 0)
         var pe = hedges.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]()  # first[] holds absolute edge addresses
         var o1 = Sp(pv, pf, pe)
+        if Int(cases[b]) == MESH:  # mesh-mesh: geom1's own hull (column 38)
+            var h1 = Int(cases[b + 38])
+            o1 = Sp(hverts.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]() + 3 * Int(hmeta[3 * h1]), hfirst.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutAnyOrigin]() + Int(hmeta[3 * h1 + 1]), pe)
         var o2 = Sp(pv, pf, pe)
         o1.kind = Int(cases[b])
         o2.kind = Int(cases[b + 1])

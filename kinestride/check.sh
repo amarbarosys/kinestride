@@ -204,6 +204,20 @@ if [ "$stage" = xfrc ]; then  # MuJoCo xfrc_applied (mj_xfrcAccumulate): 4 rando
   [ $fail -eq 0 ] || { echo "FAIL $fail xfrc checks"; exit 1; }
   echo "PASS all xfrc checks"; exit 0
 fi
+if [ "$stage" = meshmesh ]; then  # mesh-mesh contact (mjc_Convex, margin > 0: one GJK + EPA contact, then the perturbation search,
+  # up to 5): narrowphase vs mj_collision on the fly's hulls paired with each other, then the step across two trees of mesh hulls
+  $M -m kinestride.convex_check mesh 6000 f64 1e-9 1 || { echo "FAIL meshmesh narrowphase f64"; fail=$((fail+1)); }
+  $M -m kinestride.convex_check mesh 6000 f32 1e-4 1 || { echo "FAIL meshmesh narrowphase f32"; fail=$((fail+1)); }
+  W=kinestride/models/cross_mesh.xml
+  CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $W $X/meshmesh/e equality 64 || { echo "FAIL meshmesh step"; fail=$((fail+1)); }
+  # the gate must fail with: geom1 built on geom2's hull (the code before mesh-mesh), and the EPA normal flipped
+  CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/^                    if s1.kind == MESH:  # mesh-mesh/                    if False:  # mesh-mesh/' -- \
+    $M -m kinestride.model check $W $X/meshmesh/mutant equality 64 || fail=$((fail+1))
+  ~/iTools/bin/mutant-check kinestride/convex.mojo 's/return normalize3(st.x1 - st.x2)/return normalize3(st.x2 - st.x1)/' -- \
+    $M -m kinestride.convex_check mesh 600 f64 1e-9 3 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail meshmesh checks"; exit 1; }
+  echo "PASS all meshmesh checks"; exit 0
+fi
 if [ "$stage" = mocap ]; then  # two mocap bodies (random mocap_pos/quat per state, quats unnormalised) welded/connected to the animal
   E=kinestride/models/eq_mocap.xml
   $M -m kinestride.model check $E $X/mocap mocap 64 || { echo "FAIL mocap"; fail=$((fail+1)); }
