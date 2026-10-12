@@ -8,7 +8,7 @@ and rebuilt clean-room: `provenance/motion-godot.md`. Plan: `plans/MOTION_DATASE
 ```
 bvh mjcf OUT.xml                 the one character   check.sh bvh    (CPU)
 bvh clip CLIP.bvh OUT            OUT.qref, OUT.mclip check.sh bvh    (CPU)
-track DIR STEM                   STEM.ks.mclip       check.sh track  (GPU, under gpu-wait)
+track DIR                        DIR/out.bin         check.sh track, check.sh dataset (engine runs only on the card)
 motion_metrics REF SIM [OUT]     five numbers        check.sh motion (CPU)
 ```
 
@@ -80,3 +80,33 @@ Tracking on 10_01 (800 frames, 64 animals, `check.sh track`):
   these clips. foot_skate here is the simulated foot's: the reference's ankle no longer moves inside contact runs.
 - contact_err compares the reference's height + speed rule with the solver's contacts (two definitions), not barred.
 - 28 ms per frame (4 steps, 64 animals; v0.8.0's 31-body character: 61 ms), card shared with other jobs.
+
+## Dataset: every animal its own clip, push and fall (`track`, `check.sh dataset`)
+
+`track_check prepare DIR FLIES SCHEDULE STEM...` writes the per-animal inputs: `ref.bin` (animal a plays clip a mod the
+number of clips; shorter clips hold their last frame), `plan.bin` (push frame, body, frames, wrench, fall influence,
+ramp), start states, and the foot and pair maps; `track DIR` runs every animal at once and writes all their poses and
+solver contacts to `DIR/out.bin`. Per animal and frame: hinge servo target = q + w (ref - q) (w = 1 exactly the
+reference; w scales the servo gain), the assist weld on until the push (MuJoCo `eq_active`, engine `-DEQACT=1`), the
+push as an xfrc slot, then w ramps to the fall influence: a pushed body falls as unassisted physics.
+
+`check.sh dataset` (4 CMU clips, 8 animals, 360 frames, chest pushes of 300-490 N for 0.1 s at 1 s on every other
+animal): every animal matches MuJoCo's run of the same schedule through its push plus 10 frames within 1.5e-7 m
+(later a fall is chaotic and only reported), the pushed animals' hips drop more than 0.5 m, the unpushed stay within
+0.1 m of their reference, and `DIR/labels.tsv` lists per animal the clip, its CMU description, the push, whether it
+fell and the pre-push tracking error. 3 planted bugs caught (assist never released, hinge targets one entry early,
+every animal on animal 0's clip).
+
+| animals | animal-steps/s (K = 4, 120 Hz clips) | ms per frame |
+|---|---|---|
+| 8 | 919 | 34.8 |
+| 64 | 8,761 | 29.2 |
+| 4,096 | 372k (3 runs, spread 0.04 %) | 44.0 |
+| 16,384 | 746k (1 run) | 87.8 |
+
+Load average 11 to 16 on the box. 16,384 animals clear the 420k target (100x the first tracking loop's 4,200).
+
+Card time: the stages hold the card only for the engine binary (`gpu-wait run` inside the stage, seconds per run).
+Warm first with `BUILD_ONLY=1 kinestride/check.sh track|dataset`: binaries through mojo-cached, and the GPU kernel
+compiled in gpu-wait's CPU room (`COMPILE_ONLY=1`); a cold kernel compile is minutes and used to happen on the card.
+Measured: track stage 123 s wall, 27 s per full-clip engine run; dataset 24 s per run.

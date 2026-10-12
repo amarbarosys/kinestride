@@ -70,23 +70,36 @@ if [ "$stage" = bvh ]; then  # BVH -> canonical character + reference clip (bvh.
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all bvh checks"; exit 0
 fi
-if [ "$stage" = track ]; then  # unit B: the tracking loop (track.mojo, 64 animals, K=4) vs the same loop in MuJoCo on CMU 10_01, both scored vs the reference
-  T=$X/track; mkdir -p $T $X/bvh $X/motion; export PATH=$PWD/.venv/bin:$PATH
-  mojo build -I kinestride kinestride/bvh.mojo -o $X/bvh/bvh && mojo build -I kinestride kinestride/motion_metrics.mojo -o $X/motion/motion_metrics || { echo "FAIL track tools build"; exit 1; }
-  R="$X/bvh/bvh mjcf $T/10_01.xml > /dev/null && $X/bvh/bvh clip .work/assets/cmu/10_01.bvh $T/10_01 > /dev/null \
-    && $M -m kinestride.track_check prepare $T/10_01 $T/ 64 > $T/prepare.log 2>&1 \
-    && ~/iTools/bin/mojo-cached build \$(cat $T/sizes.txt) -DFLIES=64 -DSTAGE=7 -DK=4 -I kinestride kinestride/track.mojo -o $T/track > $T/build.log 2>&1 \
-    && $T/track $T/ $T/10_01 && $M -m kinestride.track_check mujoco $T/10_01 && $M -m kinestride.track_check gate $T/10_01 $X/motion/motion_metrics"
-  bash -c "$R" || { echo "FAIL track 10_01 (logs: $T/prepare.log $T/build.log)"; fail=$((fail+1)); }
-  # 240 frames, Kinestride vs MuJoCo bars only: must pass as is, and fail with hinge targets one qpos entry early,
-  # quaternion rows at the wrong offset, contact slots of the wrong pair
-  env FRAMES=240 BARS=mujoco bash -c "$R" || { echo "FAIL track 240-frame baseline"; fail=$((fail+1)); }
-  for m in 's/u\[i \* F + a\] = row.unsafe_offset(7 + i)\[\]/u[i * F + a] = row.unsafe_offset(6 + i)[]/' \
-           's/pose\[(3 \* (NB - 1) + 4 \* b + k) \* F\]/pose[(3 * NB + 4 * b + k) * F]/' 's/valid\[(3 \* p + sl) \* F\]/valid[(p + sl) * F]/'; do
+if [ "$stage" = track ] || [ "$stage" = dataset ]; then  # the tracking loop (track.mojo, K=4) vs the same loop in MuJoCo: track = CMU 10_01 on
+  # 64 animals; dataset = 4 clips on 8 animals, half pushed (falls with the assist off). Run WITHOUT an outer gpu-wait: only the
+  # engine binary takes the card (seconds); warm first with BUILD_ONLY=1 kinestride/check.sh $stage (its verdict ignored): binaries
+  # through mojo-cached, and the GPU kernel compiled in gpu-wait's CPU room (COMPILE_ONLY), so no card time goes to compiling
+  T=$X/$stage; C=.work/assets/cmu; mkdir -p $T $X/bvh $X/motion; export PATH=$PWD/.venv/bin:$PATH
+  G="/usr/bin/time -f card_job_%e_s gpu-wait run --priority 90 --timeout 900 --"
+  mojo build -I kinestride kinestride/bvh.mojo -o $X/bvh/bvh && mojo build -I kinestride kinestride/motion_metrics.mojo -o $X/motion/motion_metrics || { echo "FAIL $stage tools build"; exit 1; }
+  if [ "$stage" = track ]; then CL="10_01"; FL=64; SCH=none; NA=1; GATE="track $T $X/motion/motion_metrics"
+  else CL="10_01 02_05 60_01 55_22"; FL=8; SCH=push; NA=8; GATE="dataset $T $X/motion/motion_metrics $C/index.txt"; export FRAMES=${FRAMES:-360}; fi
+  R="$X/bvh/bvh mjcf $T/character.xml > /dev/null && for c in $CL; do $X/bvh/bvh clip $C/\$c.bvh $T/\$c > /dev/null || exit 1; done \
+    && $M -m kinestride.track_check prepare $T $FL $SCH $(for c in $CL; do printf '%s ' $T/$c; done) > $T/prepare.log 2>&1 \
+    && ~/iTools/bin/mojo-cached build \$(cat $T/sizes.txt) -DFLIES=$FL -DSTAGE=7 -DK=4 -DNXF=1 -DEQACT=1 -I kinestride kinestride/track.mojo -o $T/track > $T/build.log 2>&1 \
+    && if [ -n \"\${BUILD_ONLY:-}\" ]; then gpu-wait run --room cpu --cores 4 --timeout 1800 -- env COMPILE_ONLY=1 $T/track $T/ > $T/compile.log 2>&1; \
+       else $G $T/track $T/ && $M -m kinestride.track_check mujoco $T $NA && $M -m kinestride.track_check $GATE; fi"
+  bash -c "$R" || { echo "FAIL $stage (logs: $T/prepare.log $T/build.log)"; fail=$((fail+1)); }
+  # 240 frames, Kinestride vs MuJoCo bars only: must pass as is, and fail with hinge targets one qpos entry early, quaternion rows
+  # read at the position offset, contact slots of the wrong pair; dataset also: the assist never released, every animal on animal 0's clip
+  M1='s/var target = row.unsafe_offset((7 + i) \* F + a)\[\]/var target = row.unsafe_offset((6 + i) * F + a)[]/'
+  M2='s/put(fh, pose.unsafe_ptr().unsafe_offset(3 \* (NB - 1) \* F), 4 \* nbc \* F)/put(fh, pose.unsafe_ptr().unsafe_offset(3 * nbc * F), 4 * nbc * F)/'
+  M3='s/if valid\[(3 \* pr + sl) \* F + a\] != 0:/if valid[(pr + sl) * F + a] != 0:/'
+  M4='s/u\[(NU + 14) \* F + a\] = 0 if since >= 0 else 1/u[(NU + 14) * F + a] = 1/'
+  M5='s/var target = row.unsafe_offset((7 + i) \* F + a)\[\]/var target = row.unsafe_offset((7 + i) * F)[]/'
+  MS="$M1|$M2|$M3"; [ "$stage" = dataset ] && MS="$M1|$M4|$M5"
+  [ "$stage" = track ] && { FRAMES=240 BARS=mujoco bash -c "$R" || { echo "FAIL $stage 240-frame baseline"; fail=$((fail+1)); }; }
+  IFS='|' read -ra MUTS <<< "$MS"
+  for m in "${MUTS[@]}"; do
     ~/iTools/bin/mutant-check kinestride/track.mojo "$m" -- env FRAMES=240 BARS=mujoco bash -c "$R" || fail=$((fail+1))
   done
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
-  echo "PASS all track checks"; exit 0
+  echo "PASS all $stage checks"; exit 0
 fi
 if [ "$stage" = eqact ]; then  # per-animal equality on/off (-DEQACT=1: random 0/1 per equality per state in ctrl.bin after the push slots) vs MuJoCo eq_active;
   export CPU=1  # the CPU engine runs the kernel's step code: no card needed (the GPU build is confirmed once per change, docs/MOTION.md)
