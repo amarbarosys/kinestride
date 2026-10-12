@@ -17,7 +17,7 @@ tendon/flex equalities, coupling across two trees outside Newton + pyramidal + E
 |---|---|
 | dynamics | kinematics, composite inertia, sparse mass-matrix factor, RNE bias, springs, dampers, gravity compensation |
 | integrators | Euler, RK4, implicit, implicitfast (+ midpoint for free bodies) |
-| contacts | plane and heightfield vs mesh; sphere, capsule, ellipsoid, cylinder; box and convex meshes (GJK + EPA, multi-contact); automatic body-body pairs; pyramidal and elliptic cones; noslip |
+| contacts | plane and heightfield vs mesh; sphere, capsule, ellipsoid, cylinder; box and convex meshes, mesh vs mesh (GJK + EPA, multi-contact); automatic body-body pairs; pyramidal and elliptic cones; noslip |
 | constraints | Newton (default), CG, PGS; connect, weld, joint equalities; joint and tendon limits; standard and direct solref; pairs, tendons and equalities across trees |
 | actuators | joint servos, fixed and spatial tendons, adhesion |
 | more | push input (xfrc_applied), fluid forces, per-body sleep, mocap bodies, a game layer (energy, health, stamina), a ray-marching renderer with eye cameras |
