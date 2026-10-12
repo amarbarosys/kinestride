@@ -1153,6 +1153,40 @@ def vertex_colour(m, g, v):
     return col
 
 
+_ASSETS = []
+
+
+def _assets(*args, mesh=None):
+    """Run assets.mojo (the world-part mesh builders; assets.py stays its oracle, assets_check.py): (vertices, faces).
+    mesh: (vertices, faces) written as the input file of `split`. Files under .work/assets-mojo/, one pair per process."""
+    out = Path('.work/assets-mojo')
+    out.mkdir(parents=True, exist_ok=True)
+    if not _ASSETS:
+        _ASSETS.append(out / 'assets')
+        subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('assets.mojo')),
+                        '-o', str(_ASSETS[0])], check=True)
+    src, dst = out / f'in-{os.getpid()}.bin', out / f'out-{os.getpid()}.bin'
+    cmd = [str(_ASSETS[0]), *map(str, args), str(dst)]  # primitive BOX SX SY SZ OUT
+    if mesh is not None:  # split IN OUT EDGE
+        v, f = np.asarray(mesh[0], '<f8'), np.asarray(mesh[1], '<i4')
+        src.write_bytes(np.array([len(v), len(f)], '<u4').tobytes() + v.tobytes() + f.tobytes())
+        cmd = [str(_ASSETS[0]), args[0], str(src), str(dst), *map(str, args[1:])]
+    subprocess.run(cmd, check=True)
+    b = dst.read_bytes()
+    nv, nf = np.frombuffer(b[:8], '<u4')
+    return np.frombuffer(b[8:8 + 24 * nv], '<f8').reshape(nv, 3).copy(), np.frombuffer(b[8 + 24 * nv:], '<i4').reshape(nf, 3).astype(np.int64)
+
+
+def assets_primitive(box, size):
+    """(vertices, faces) of a MuJoCo box (half sizes) or ellipsoid (radii) in its geom frame, from assets.mojo."""
+    return _assets('primitive', int(bool(box)), *(repr(float(s)) for s in size[:3]))
+
+
+def assets_split(v, f, edge=0.4):
+    """Every triangle side under `edge` (render.raster gives one thread a triangle's screen box), from assets.mojo."""
+    return _assets('split', repr(float(edge)), mesh=(v, f))
+
+
 def meshes(mjcf, out, grid=0, world=None):
     """Renderer tables (docs/RENDERER.md) for every mesh geom: rmi.bin int32 per part (body, vertex offset,
     vertex count, triangle offset, triangle count), rmf.bin float32 per part (local pos 3, local quat 4, box
@@ -1160,7 +1194,7 @@ def meshes(mjcf, out, grid=0, world=None):
     part's box then int16 unit vertex normals x 32767 (area-weighted face normals, mesh frame), then int16 vertex rgb 0..255
     (material x texture: vertex_colour), rt.bin uint16 triangles local to the part, rp.bin uint8 part per triangle. Returns the decode error relative to part size.
     world: also draw the world body's box and ellipsoid geoms (walls, stones) and these extra world parts, a list of
-    (vertices (n, 3) world mm, faces (m, 3), rgba) (fly-connectome agent/body_engine/assets.py builds them with kinestride/assets.py); body 0 parts are drawn fixed (render.vertex)."""
+    (vertices (n, 3) world mm, faces (m, 3), rgba) (fly-connectome agent/body_engine/assets.py builds them; boxes, ellipsoids and the split come from assets.mojo); body 0 parts are drawn fixed (render.vertex)."""
     m, out = load(mjcf), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     ints, floats, verts, norms, cols, tris, part, worst = [], [], [], [], [], [], [], 0.0
@@ -1203,7 +1237,7 @@ def meshes(mjcf, out, grid=0, world=None):
         rgba = m.mat_rgba[m.geom_matid[g]] if m.geom_matid[g] >= 0 else m.geom_rgba[g]
         add(m.geom_bodyid[g], m.geom_pos[g], m.geom_quat[g], v, f, rgba, f'geom {g}', col)
     if world is not None:
-        from kinestride.assets import primitive, split
+        primitive, split = assets_primitive, assets_split
         for g in np.flatnonzero((m.geom_bodyid == 0) & np.isin(m.geom_type, (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_ELLIPSOID))):
             rgba = m.mat_rgba[m.geom_matid[g]] if m.geom_matid[g] >= 0 else m.geom_rgba[g]
             if rgba[3] == 0:  # invisible (the lid): nothing to draw, and split it alone overflows a part's 65,535 vertices

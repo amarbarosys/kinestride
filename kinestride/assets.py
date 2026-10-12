@@ -1,6 +1,7 @@
 """Mesh builders for the renderer's world parts (model.meshes world=...): an icosphere, MuJoCo box and ellipsoid geoms as
 triangles, and a splitter that keeps every triangle side short (render.raster gives one thread a triangle's whole screen box).
 Moved from fly-connectome agent/body_engine/assets.py, which keeps the scene (walls, grass, flowers, markers) and imports these.
+Oracle only since 2026-10-12: model.meshes runs assets.mojo; assets_check.py compares the two.
 """
 import numpy as np
 
