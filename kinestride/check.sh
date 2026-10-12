@@ -61,6 +61,24 @@ if [ "$stage" = bvh ]; then  # BVH -> MJCF + reference clip (bvh.mojo, CPU build
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all bvh checks"; exit 0
 fi
+if [ "$stage" = track ]; then  # unit B: the tracking loop (track.mojo, 64 animals, K=4) vs the same loop in MuJoCo on CMU 10_01, both scored vs the reference
+  T=$X/track; mkdir -p $T $X/bvh $X/motion; export PATH=$PWD/.venv/bin:$PATH
+  mojo build -I kinestride kinestride/bvh.mojo -o $X/bvh/bvh && mojo build -I kinestride kinestride/motion_metrics.mojo -o $X/motion/motion_metrics || { echo "FAIL track tools build"; exit 1; }
+  R="$X/bvh/bvh mjcf .work/assets/cmu/10_01.bvh $T/10_01.xml > /dev/null && $X/bvh/bvh clip .work/assets/cmu/10_01.bvh $T/10_01 > /dev/null \
+    && $M -m kinestride.track_check prepare $T/10_01 $T/ 64 > $T/prepare.log 2>&1 \
+    && ~/iTools/bin/mojo-cached build \$(cat $T/sizes.txt) -DFLIES=64 -DSTAGE=7 -DK=4 -I kinestride kinestride/track.mojo -o $T/track > $T/build.log 2>&1 \
+    && $T/track $T/ $T/10_01 && $M -m kinestride.track_check mujoco $T/10_01 && $M -m kinestride.track_check gate $T/10_01 $X/motion/motion_metrics"
+  bash -c "$R" || { echo "FAIL track 10_01 (logs: $T/prepare.log $T/build.log)"; fail=$((fail+1)); }
+  # 240 frames, Kinestride vs MuJoCo bars only: must pass as is, and fail with hinge targets one qpos entry early,
+  # quaternion rows at the wrong offset, contact slots of the wrong pair
+  env FRAMES=240 BARS=mujoco bash -c "$R" || { echo "FAIL track 240-frame baseline"; fail=$((fail+1)); }
+  for m in 's/u\[i \* F + a\] = row.unsafe_offset(7 + i)\[\]/u[i * F + a] = row.unsafe_offset(6 + i)[]/' \
+           's/pose\[(3 \* (NB - 1) + 4 \* b + k) \* F\]/pose[(3 * NB + 4 * b + k) * F]/' 's/valid\[(3 \* p + sl) \* F\]/valid[(p + sl) * F]/'; do
+    ~/iTools/bin/mutant-check kinestride/track.mojo "$m" -- env FRAMES=240 BARS=mujoco bash -c "$R" || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all track checks"; exit 0
+fi
 if [ "$stage" = hfield ]; then  # exact heightfield contact (mjc_ConvexHField: GJK + EPA per cell prism, convex.mojo, CPU build) on a bumpy seeded terrain vs MuJoCo's own hfield geom
   $M -m kinestride.hfield_check 6000 f64 1 || { echo "FAIL hfield f64"; fail=$((fail+1)); }
   $M -m kinestride.hfield_check 6000 f32 1 || { echo "FAIL hfield f32"; fail=$((fail+1)); }
