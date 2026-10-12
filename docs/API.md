@@ -34,4 +34,10 @@ Two push slots on one body add. `-DNXF=0`, the default, compiles the push path o
 step, or K steps with `-DK=k`. `DIR/smooth.bin` holds the stage's MuJoCo fields per animal in world positions; their
 names and order are `model.STAGES[stage]`. Each stage is checked against MuJoCo 3.9.0 by `kinestride/check.sh STAGE`.
 
-Not in this surface yet: a viewer and controller interface (planned: `kinestride/live.mojo`), contacts as a list.
+## A live loop is a Viewer plus the app's own control
+
+`viewer.Viewer(ctx, dir, cam)` loads the model, state and mesh tables of DIR onto one DeviceContext. Per frame the app
+writes `u_b` (its controller), calls `step(ctx, k)` and `frame(ctx, kc, kr, ks, ksc, kcs)` with kernels it compiled once
+(kernel handles cannot live in a struct), and reads `out_h` after copying `img_b`. `view.mojo` is that loop with ctrl held.
+
+Not in this surface yet: contacts as a list, a window for game use.

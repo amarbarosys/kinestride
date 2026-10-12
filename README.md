@@ -48,10 +48,16 @@ From another project: `uv pip install -e ~/Projects/mojo/kinestride` (Python: `k
 with `-I ~/Projects/mojo/kinestride/kinestride` (`import smooth`, `import render`, `import world`). fly-connectome is
 the first consumer: its connectome brains, live viewer and game scenes drive Kinestride bodies.
 
+## Watching a body live
+
+`kinestride/viewer.mojo` holds the live loop's engine and renderer (one DeviceContext, poses rendered without a copy);
+`kinestride/view.mojo` runs it with no brain, ctrl held, frames to stdout for mpv. An app keeps its own loop and calls
+`Viewer.step` and `Viewer.frame` around its own controller: fly-connectome's `live.mojo` drives brains this way
+(`check.sh view`: the loop equals smooth and render byte for byte).
+
 ## What is not here yet
 
-The live viewer still lives in fly-connectome, because it compiles the brain kernels in; making its controller
-pluggable is the next step toward game use. The engine has only run on gfx1100.
+A window and input for game use (fly-connectome has one, through mojo-imkit); the engine has only run on gfx1100.
 
 Reference: `docs/API.md` (the stable surface: files, rows, step), `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/ENGINE_OPT.md` (performance history),
 `docs/RENDERER.md`, `docs/HFIELD_CONTACT.md`, port queue `kinestride/port_queue.tsv`. License notes: `NOTICE`.

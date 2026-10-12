@@ -31,6 +31,7 @@ kinestride/bench.sh build MJCF [STAGE]; gpu-wait run ... -- kinestride/bench.sh 
 | 6 | plane-mesh contacts, pyramidal or elliptic cone, Newton (warm start), noslip | `contact`, `cube`, `terrain`, `cone` (elliptic) |
 | 7 | actuators (joint servos, adhesion, fixed tendons) from ctrl.bin | `actuated`, `loop` |
 | + | sphere-sphere grooming pairs; fly + spider in one model | `groom`, `world` |
+| viewer | the live loop's core (`viewer.mojo`: engine + renderer buffers on one DeviceContext, `step`, `frame`) and `view.mojo`, the loop with no brain; fly-connectome's live.mojo runs on it | `view` (state after 10 x K=1 == smooth K=10, first frame == render on the start pose, byte-equal; 2 mutants) |
 | spectate | camera follows the moving animal (`-DFOLLOW=1`) and energy/health/stamina bars (`-DHUD=1`) in the live frame, frame cost split (`-DPROFILE=1`); view code, no MuJoCo function | `spectate`, `python -m kinestride.spectate_check` |
 | world_hud | plume world in the live frame (`-DWORLD=1`): odor sites sampled on the card from world_content's descriptor, concentrations printed in the HUD, sources drawn in a mini-map (fly sites, spider leg I tarsus tips) | `world_hud` (`world_check.py`) |
 | flylink3 | the same fly with the host taken out (`live.mojo -DBRAIN=3`, one DeviceContext): resident Shiu brain, DN readout, FlyGym gait kernel on the card, no host copy per step | `flylink3` (`fly_link3.py`), `flygait` (gait kernel vs HybridTurningController), `shiures` (resident brain vs ShiuLive) |
