@@ -110,7 +110,8 @@ comptime NEQCH = get_defined_int["NEQCH", 0]()
 comptime NEQJ = get_defined_int["NEQJ", 0]()  # Jacobian entries: rows x chain length, summed
 comptime EQH = 12
 comptime EQF = 31
-comptime CEQH = NI2 + (4 * NCP if NCV > 0 else 0)  # the convex block (kind, two shape kinds, condim per pair) sits between the tendon and equality blocks
+comptime NMM = get_defined_int["NMM", 0]() == 1  # a mesh-mesh pair exists: per pair geom1's hull vertex and first-edge offsets after the convex block
+comptime CEQH = NI2 + ((6 if NMM else 4) * NCP if NCV > 0 else 0)  # the convex block (kind, two shape kinds, condim per pair) sits between the tendon and equality blocks
 comptime CEQC = CEQH + EQH * NEQ
 comptime CEQM = CEQC + NEQCH
 # mocap bodies (model.py mocap_block, after the equality block): body_mocapid per body; each animal's mocap pose (pos 3,
@@ -145,6 +146,7 @@ comptime NI = MPAIR + (NV * NV if get_defined_int["MPAIR", 0]() == 1 else 0)
 comptime CKIND = NI2  # NCV: per pair 0 plane/sphere/tangent, 1 ellipsoid-mesh, 2 box-mesh, 3 exact heightfield, 4 primitive pair (GJK + EPA), 5 capsule-capsule, 6 sphere-capsule, 7 sphere-cylinder
 comptime CGT = CKIND + NCP  # NCV: per pair the convex.mojo shape kinds of geom1 and geom2
 comptime CCND = CKIND + 3 * NCP  # NCV: per pair condim (1: one frictionless row, 3: the pyramid)
+comptime CMM = CKIND + 4 * NCP  # NMM: per pair geom1's hull vertex offset and first-edge offset (mesh-mesh pairs; 0 0 for the others)
 # mf.bin: body_pos, body_quat, jnt_pos, jnt_axis, qpos0, body_ipos, body_iquat, geom_pos, geom_quat
 comptime BPOS = 0
 comptime BQUAT = 3 * NB
@@ -1496,6 +1498,10 @@ def convex_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, kin
             if kind == 4:  # two primitives (sphere, capsule, ellipsoid, cylinder): mjc_Convex, the perturbation search on capsule/cylinder pairs (up to 5)
                 s1.kind = Int(mi[CGT + 2 * p]); s2.kind = Int(mi[CGT + 2 * p + 1])
                 s2.size = m3(mf, CCV + 6 + 3 * NCP + 3 * p).cast[CT]()
+                comptime if NMM:
+                    if s1.kind == MESH:  # mesh-mesh (mjc_Convex): geom1's own hull, s1 was built on geom2's
+                        s1 = Sp(mf.ptr.unsafe_offset(CVERT + 3 * Int(mi[CMM + 2 * p])), mi.ptr.unsafe_offset(CFIRST + Int(mi[CMM + 2 * p + 1])), mi.ptr.unsafe_offset(CEDGE))
+                        s1.kind = MESH
             else:
                 s1.kind = BOX if kind == 2 else ELLIPSOID
                 s2.kind = MESH
