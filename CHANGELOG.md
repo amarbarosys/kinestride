@@ -2,6 +2,7 @@
 
 Full notes in `docs/releases/`. Newest first. Format: `~/iTools/dev/release-note/TEMPLATE.md`.
 
+- [v0.10.0](docs/releases/v0.10.0.md) (2026-10-12): one canonical body for any mocap skeleton, spike repair, limb planting
 - [v0.9.0](docs/releases/v0.9.0.md) (2026-10-12): watch any body live: Viewer and view.mojo (check.sh view)
 - [v0.8.0](docs/releases/v0.8.0.md) (2026-10-12): mocap clips drive a physics character (bvh, track, motion metrics)
 - [v0.7.0](docs/releases/v0.7.0.md) (2026-10-12): mesh-mesh contact (mjc_Convex, check.sh meshmesh); margin-0 box/mesh pairs refused
