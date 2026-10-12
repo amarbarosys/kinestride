@@ -11,14 +11,14 @@ become compile-time constants, so a fly, a spider or a game character each compi
 A body built in Blender gets here through the blender-mjcf add-on (parented meshes become bodies, named Empties
 become joints; armatures, masses and actuators are not exported, so those are added to the XML by hand).
 Export refuses what the engine cannot simulate instead of dropping it: dof friction loss, condim 4 and 6, flex,
-tendon/flex equalities, a constraint joining two bodies' trees.
+tendon/flex equalities, coupling across two trees outside Newton + pyramidal + Euler.
 
 | area | ported and checked |
 |---|---|
 | dynamics | kinematics, composite inertia, sparse mass-matrix factor, RNE bias, springs, dampers, gravity compensation |
 | integrators | Euler, RK4, implicit, implicitfast (+ midpoint for free bodies) |
 | contacts | plane and heightfield vs mesh; sphere, capsule, ellipsoid, cylinder; box and convex meshes (GJK + EPA, multi-contact); automatic body-body pairs; pyramidal and elliptic cones; noslip |
-| constraints | Newton (default), CG, PGS; connect, weld, joint equalities; joint and tendon limits; standard and direct solref |
+| constraints | Newton (default), CG, PGS; connect, weld, joint equalities; joint and tendon limits; standard and direct solref; pairs, tendons and equalities across trees |
 | actuators | joint servos, fixed and spatial tendons, adhesion |
 | more | fluid forces, per-body sleep, mocap bodies, a game layer (energy, health, stamina), a ray-marching renderer with eye cameras |
 
