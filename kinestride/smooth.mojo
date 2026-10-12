@@ -118,7 +118,8 @@ comptime CEQM = CEQC + NEQCH
 # quat 4 per mocap body) rides in rows NU.. of ctrl.bin
 comptime NMOCAP = get_defined_int["NMOCAP", 0]()
 comptime NXF = get_defined_int["NXF", 0]()  # MuJoCo xfrc_applied, sparse: slots per animal in ctrl.bin after the mocap rows, each body id, force 3, torque 3
-comptime NUC = NU + 7 * NMOCAP + 7 * NXF
+comptime EQACT = get_defined_int["EQACT", 0]()  # 1: per-animal equality on/off, NEQ ctrl.bin rows after the push slots (MuJoCo eq_active)
+comptime NUC = NU + 7 * NMOCAP + 7 * NXF + (NEQ if EQACT else 0)
 comptime CMOC = CEQM + NEQCH
 # gravcomp (model.py gravcomp_block, last): ints jnt_actgravcomp per joint, floats body_gravcomp per body
 comptime GRAVCOMP = get_defined_int["GRAVCOMP", 0]() == 1
@@ -1725,7 +1726,7 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
                 res[(OQACT + d) * F + f] += get(res, f, OGC + d)
 
 
-def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
+def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
     """MuJoCo mj_instantiateEquality (engine_core_constraint.c:513) for connect, weld and joint constraints, mj_diagApprox
     (:1637), mj_makeImpedance (:2069) and mj_referenceConstraint (:3048) with its mj_Jdotv correction (:973): per constraint
     the rows' residual, Jacobian over the constraint's chain (mj_jacDifPair, anchors 0 minus 1, weld rotation corrected
@@ -1861,10 +1862,13 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
         var imp = impedance(s0, s1, s2, s3, s4, posn)
         var K = 1 / max(Float32(1e-15), s1 * s1 * ref0 * ref0 * ref1 * ref1)
         var B = 2 / max(Float32(1e-15), s1 * ref0)
+        var on = Float32(1)
+        comptime if EQACT:  # an inactive equality's rows get D = 0: no force, no Hessian term, no cost (MuJoCo drops them)
+            on = ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]
         for k in range(size):
             var row = rbase + k
             var dA = mf[ef + 23] if typ == 1 and k >= 3 else mf[ef + 22]
-            res[(OEQD + row) * F + f] = 1 / max(Float32(1e-15), (1 - imp) * dA / imp)
+            res[(OEQD + row) * F + f] = on / max(Float32(1e-15), (1 - imp) * dA / imp)
             var vel: Float32 = 0
             for c in range(nch):
                 vel += get(res, f, jb + k * nch + c) * qvel[Int(mi[CEQC + choff + c]) * F + f]
@@ -3879,7 +3883,7 @@ def step(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int, rks: Int
                 npa += 1
         res[OPA * F + f] = Float32(npa)
         comptime if NEQ > 0:
-            equality(mi, mf, qpos, qvel, res, f)
+            equality(mi, mf, qpos, qvel, ctrl, res, f)
         comptime if STAGE >= 7:
             comptime if GAME:  # not started: every row zero (a dead animal has dead = 1, so it is never re-initialised)
                 if get(res, f, OGAME) == 0 and get(res, f, OGAME + 1) == 0 and get(res, f, OGAME + 2) == 0 and get(res, f, OGAME + 3) == 0:

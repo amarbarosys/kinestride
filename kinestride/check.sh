@@ -88,6 +88,18 @@ if [ "$stage" = track ]; then  # unit B: the tracking loop (track.mojo, 64 anima
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all track checks"; exit 0
 fi
+if [ "$stage" = eqact ]; then  # per-animal equality on/off (-DEQACT=1: random 0/1 per equality per state in ctrl.bin after the push slots) vs MuJoCo eq_active;
+  export CPU=1  # the CPU engine runs the kernel's step code: no card needed (the GPU build is confirmed once per change, docs/MOTION.md)
+  for e in "equality kinestride/models/eq_test.xml equality" "equality_contact kinestride/models/eq_contact.xml equality" "mocap kinestride/models/eq_mocap.xml mocap"; do
+    set -- $e
+    EQACT=1 $M -m kinestride.model check $2 $X/eqact_$1 $3 64 || { echo "FAIL eqact $1"; fail=$((fail+1)); }
+  done
+  # the gate must fail with the flag ignored (every equality on)
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/            on = ctrl\[(NU + 7 \* NMOCAP + 7 \* NXF + e) \* F + f\]/            on = Float32(1)/' -- \
+    env EQACT=1 $M -m kinestride.model check kinestride/models/eq_test.xml $X/mutant equality 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all eqact checks"; exit 0
+fi
 if [ "$stage" = hfield ]; then  # exact heightfield contact (mjc_ConvexHField: GJK + EPA per cell prism, convex.mojo, CPU build) on a bumpy seeded terrain vs MuJoCo's own hfield geom
   $M -m kinestride.hfield_check 6000 f64 1 || { echo "FAIL hfield f64"; fail=$((fail+1)); }
   $M -m kinestride.hfield_check 6000 f32 1 || { echo "FAIL hfield f32"; fail=$((fail+1)); }

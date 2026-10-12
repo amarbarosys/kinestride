@@ -25,6 +25,7 @@ Every per-animal array is `[row][animal]`, animals fastest, float32.
 | `ctrl.bin`, first | NU | MuJoCo ctrl (actuators) |
 | `ctrl.bin`, then 7 per mocap body | 7 NMOCAP | mocap_pos 3, mocap_quat 4 |
 | `ctrl.bin`, then 7 per push slot | 7 NXF | MuJoCo xfrc_applied, sparse: body id (0 = empty), force 3, torque 3 at the body's centre of mass, world frame |
+| `ctrl.bin`, then 1 per equality (`-DEQACT=1`) | NEQ | MuJoCo eq_active: 1 on, 0 off (the equality's rows get no force, Hessian term or cost) |
 
 Two push slots on one body add. `-DNXF=0`, the default, compiles the push path out.
 
