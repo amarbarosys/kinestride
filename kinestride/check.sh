@@ -27,6 +27,15 @@ if [ "$stage" = convex ]; then  # GJK + EPA narrowphase (convex.mojo, CPU build)
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all convex checks"; exit 0
 fi
+if [ "$stage" = city ]; then  # the endless city (city.mojo, CPU build): point march, rebase at 10^6 m, streets, golden snapshot
+  C="mojo build -I kinestride kinestride/city_check.mojo -o $X/city/check && $X/city/check kinestride/city_golden.bin"
+  mkdir -p $X/city; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL city check"; fail=$((fail+1)); }
+  for m in 's/seed + 7)/seed + 9)/' 's/R \* (1 + a \* cos/R * (1 - a * cos/' 's/if mx < my:/if mx > my:/' 's/for i in range(1, 33):/for i in range(1, 9):/'; do
+    ~/iTools/bin/mutant-check kinestride/city.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # lot hash, footprint sign, DDA order, polar steps
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all city checks"; exit 0
+fi
 if [ "$stage" = hfield ]; then  # exact heightfield contact (mjc_ConvexHField: GJK + EPA per cell prism, convex.mojo, CPU build) on a bumpy seeded terrain vs MuJoCo's own hfield geom
   $M -m kinestride.hfield_check 6000 f64 1 || { echo "FAIL hfield f64"; fail=$((fail+1)); }
   $M -m kinestride.hfield_check 6000 f32 1 || { echo "FAIL hfield f32"; fail=$((fail+1)); }

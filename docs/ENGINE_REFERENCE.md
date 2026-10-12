@@ -109,6 +109,7 @@ convex_check.py, convex_test.mojo   narrowphase gate vs mj_collision (check.sh c
 convex_gpu.mojo, convex_bench.sh   narrowphase on the card: ns per pair class, VGPR/scratch/LDS;  row_diag.py   engine contact rows vs MuJoCo's efc rows (DUMP=1 build)
 world.mojo, world.py   terrain function (model.world_height_grad runs world.mojo's CLI `world IN OUT N`; world.py is the oracle of `python -m kinestride.world diff`), world MJCFs (planes, cube, ramp)
 assets.mojo, assets.py   world-part meshes (icosphere, box and ellipsoid geoms, edge splitter) for model.meshes; assets.py is the oracle of assets_check.py
+city.mojo, city_check.mojo   endless city at 1 m units: 64 m cells keyed on the global cell (origin rebased by whole cells), lots with box or polar r(t) = R (1 + a cos(k t + phi)) footprints and setback tiers; city_hit (DDA, slab, polar march), city_height; `check.sh city` (point march, rebase at 10^6 m, streets, golden `city_golden.bin`, 4 mutants)
 world_content.mojo/.py seeded plume descriptor and concentration sampler; check, GPU fixture and scenario TOML
 game_state.mojo, game_events.py, game_state_check.py  compact game state, CPU event replay, standalone gate;  game_check.py  the engine hook's gate (`check.sh game`)
 render.mojo  ray-march renderer on engine poses;  live.mojo, live.py  engine + renderer in one process
