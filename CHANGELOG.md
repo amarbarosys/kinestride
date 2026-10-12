@@ -2,6 +2,7 @@
 
 Full notes in `docs/releases/`. Newest first. Format: `~/iTools/dev/release-note/TEMPLATE.md`.
 
+- [v0.8.0](docs/releases/v0.8.0.md) (2026-10-12): mocap clips drive a physics character (bvh, track, motion metrics)
 - [v0.7.0](docs/releases/v0.7.0.md) (2026-10-12): mesh-mesh contact (mjc_Convex, check.sh meshmesh); margin-0 box/mesh pairs refused
 - [v0.6.0](docs/releases/v0.6.0.md) (2026-10-12): push input (MuJoCo xfrc_applied, sparse slots, check.sh xfrc); docs/API.md
 - [v0.5.0](docs/releases/v0.5.0.md) (2026-10-12): pairs, tendons and equalities across trees in one model (check.sh cross); endless city (city.mojo, render -DCITY=1); world assets in Mojo
