@@ -36,6 +36,17 @@ if [ "$stage" = city ]; then  # the endless city (city.mojo, CPU build): point m
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all city checks"; exit 0
 fi
+if [ "$stage" = motion ]; then  # motion metrics (motion_metrics.mojo, CPU build) vs a float64 numpy twin + known answers
+  C="mojo build -I kinestride kinestride/motion_metrics.mojo -o $X/motion/motion_metrics && .venv/bin/python -m kinestride.motion_check $X/motion/motion_metrics"
+  mkdir -p $X/motion; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL motion check"; fail=$((fail+1)); }
+  for m in 's/abs(w))/w)/' 's/var nk = t \/\/ 2 /var nk = (t - 1) \/\/ 2 /' \
+    's/sqrt(dx \* dx + dy \* dy) \* s.hz/sqrt(dx * dx + dy * dy + (s.pos[e + 2] - s.pos[a + 2]) ** 2) * s.hz/' \
+    's/ > 0.5 and s.contact\[(t + 1) \* s.nf + f\] > 0.5:/ > 0.5:/'; do
+    ~/iTools/bin/mutant-check kinestride/motion_metrics.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # q sign, Nyquist bin, 3D skate, one-ended contact
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all motion checks"; exit 0
+fi
 if [ "$stage" = hfield ]; then  # exact heightfield contact (mjc_ConvexHField: GJK + EPA per cell prism, convex.mojo, CPU build) on a bumpy seeded terrain vs MuJoCo's own hfield geom
   $M -m kinestride.hfield_check 6000 f64 1 || { echo "FAIL hfield f64"; fail=$((fail+1)); }
   $M -m kinestride.hfield_check 6000 f32 1 || { echo "FAIL hfield f32"; fail=$((fail+1)); }
@@ -217,6 +228,19 @@ if [ "$stage" = meshmesh ]; then  # mesh-mesh contact (mjc_Convex, margin > 0: o
     $M -m kinestride.convex_check mesh 600 f64 1e-9 3 || fail=$((fail+1))
   [ $fail -eq 0 ] || { echo "FAIL $fail meshmesh checks"; exit 1; }
   echo "PASS all meshmesh checks"; exit 0
+fi
+if [ "$stage" = view ]; then  # viewer.mojo + view.mojo (the live loop with no brain) vs smooth.mojo and render.mojo byte for byte:
+  # the state after 120 one-step launches equals smooth's after one 120-step launch, the frame equals render on that pose
+  V="$M -m kinestride.view_check"
+  $V build 120 > $X/viewchk.log 2>&1 || { echo "FAIL view build: $X/viewchk.log"; fail=$((fail+1)); }
+  $V run 120 || { echo "FAIL view"; fail=$((fail+1)); }
+  # the gate must fail with: the camera never uploaded (frame), the ctrl never uploaded (state)
+  for mut in 's/        ctx.enqueue_copy(self.cam_b, self.camh.unsafe_ptr())/        pass/' \
+             's/        ctx.enqueue_copy(self.u_b, self.uv.unsafe_ptr().unsafe_bitcast\[Float32\]())/        pass/'; do
+    ~/iTools/bin/mutant-check kinestride/viewer.mojo "$mut" -- bash -c "$V build 120 > /dev/null 2>&1 && $V run 120" || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail view checks"; exit 1; }
+  echo "PASS all view checks"; exit 0
 fi
 if [ "$stage" = mocap ]; then  # two mocap bodies (random mocap_pos/quat per state, quats unnormalised) welded/connected to the animal
   E=kinestride/models/eq_mocap.xml
