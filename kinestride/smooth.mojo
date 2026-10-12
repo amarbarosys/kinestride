@@ -1248,9 +1248,21 @@ def terrain(mf: TF) -> PW:
 
 
 @always_inline
-def emit_contact(mi: TI, mf: TF, qvel: TV, res: TO, f: Int, p: Int, count: Int, cpos: V3, dist: Float32, normal: V3, y: V3, z: V3, com: V3):
+def side_com(mi: TI, qpos: TQ, res: TO, f: Int, g1: Int, b: Int, com: V3) -> V3:
+    """subtree_com of geom1's root in the frame of b's tree (mj_jacDifPair: each side about its own root); com itself
+    when geom1 is a world geom or shares b's root."""
+    var gb1 = Int(mi[GBODY + g1])
+    if gb1 == 0 or Int(mi[ROOT + gb1]) == Int(mi[ROOT + b]):
+        return com
+    var r = 3 * Int(mi[ROOT + gb1])
+    return V3(get(res, f, OSC + r), get(res, f, OSC + r + 1), get(res, f, OSC + r + 2), 0) + (origin(mi, qpos, f, gb1) - origin(mi, qpos, f, b))
+
+
+@always_inline
+def emit_contact(mi: TI, mf: TF, qvel: TV, res: TO, f: Int, p: Int, count: Int, cpos: V3, dist: Float32, normal: V3, y: V3, z: V3, com: V3, com1: V3):
     """The rest of mj_instantiateContact for contact `count` of pair p at cpos with the frame (normal, y, z): the pyramidal or
-    elliptic Jacobian rows over the pair's dof chain, getsolparam / getimpedance / makeImpedance, referenceConstraint."""
+    elliptic Jacobian rows over the pair's dof chain, getsolparam / getimpedance / makeImpedance, referenceConstraint.
+    com is geom2's side and com1 geom1's side, both in geom2's tree frame."""
     var h = mf[TSTEP]
     var impratio = mf[COPT]
     var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
@@ -1267,11 +1279,13 @@ def emit_contact(mi: TI, mf: TF, qvel: TV, res: TO, f: Int, p: Int, count: Int, 
         frictionless = mi[CCND + p] == 1
     # mj_jacDifPair over the chain: jacp = cdof_lin + cdof_ang x (pos - subtree_com[root]), signed (geom2's body
     # minus geom1's; a dof of both cancels exactly); rows to the contact frame
-    var off = cpos - com
+    var off2 = cpos - com
+    var off1 = cpos - com1
     for c in range(nch):
         var cd = OCD + 6 * Int(mi[CCHAIN + choff + c])
         var ang = V3(get(res, f, cd), get(res, f, cd + 1), get(res, f, cd + 2), 0)
-        var jp = (V3(get(res, f, cd + 3), get(res, f, cd + 4), get(res, f, cd + 5), 0) + cross(ang, off)) * Float32(mi[CSIGN + choff + c])
+        var s = Int(mi[CSIGN + choff + c])
+        var jp = (V3(get(res, f, cd + 3), get(res, f, cd + 4), get(res, f, cd + 5), 0) + cross(ang, off1 if s < 0 else off2)) * Float32(s)
         var jn = (normal * jp).reduce_add(); var j1 = (y * jp).reduce_add(); var j2 = (z * jp).reduce_add()
         var jadr = OJ + jbase(mi, res, f, p) + 4 * count * nch + c
         comptime if ELL:  # mj_instantiateContact elliptic: the contact-frame rows themselves
@@ -1405,7 +1419,7 @@ def hfield_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, q2:
         y = y - normal * (normal * y).reduce_add()
         y = y / sqrt((y * y).reduce_add())
         var z = cross(normal, y)
-        emit_contact(mi, mf, qvel, res, f, p, count, (cs.pos[count] - org).cast[DType.float32](), cs.dist[count].cast[DType.float32](), normal, y, z, com)
+        emit_contact(mi, mf, qvel, res, f, p, count, (cs.pos[count] - org).cast[DType.float32](), cs.dist[count].cast[DType.float32](), normal, y, z, com, com)
         count += 1
 
 
@@ -1422,6 +1436,8 @@ def convex_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, kin
     var pos1 = pos1_
     if Int(mi[GBODY + g1]) == 0:
         pos1 = pos1 - origin(mi, qpos, f, b)
+    elif Int(mi[ROOT + Int(mi[GBODY + g1])]) != Int(mi[ROOT + b]):  # geom1 on another tree: its frame to b's
+        pos1 = pos1 + (origin(mi, qpos, f, Int(mi[GBODY + g1])) - origin(mi, qpos, f, b))
     var far = False
     var d12 = pos2 - pos1
     if kind == 1 or kind >= 4:
@@ -1458,6 +1474,7 @@ def convex_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, kin
             s2.r0 = c[0].cast[CT](); s2.r1 = c[1].cast[CT](); s2.r2 = c[2].cast[CT]()
             cs = collide(s1, s2, margin.cast[CT](), mf[CCV].cast[CT](), min(rb1, rb2).cast[CT]())
         var com = V3(get(res, f, OSC + 3 * Int(mi[ROOT + b])), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 1), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 2), 0)
+        var com1 = side_com(mi, qpos, res, f, g1, b, com)
         var take = pool_alloc(mi, res, f, p, min(cs.n, Int(mi[CPH + 11 * p + 9])))
         while count < take:
             var normal = cs.normal[count].cast[DType.float32]()
@@ -1465,7 +1482,7 @@ def convex_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, kin
             y = y - normal * (normal * y).reduce_add()
             y = y / sqrt((y * y).reduce_add())
             var z = cross(normal, y)
-            emit_contact(mi, mf, qvel, res, f, p, count, cs.pos[count].cast[DType.float32](), cs.dist[count].cast[DType.float32](), normal, y, z, com)
+            emit_contact(mi, mf, qvel, res, f, p, count, cs.pos[count].cast[DType.float32](), cs.dist[count].cast[DType.float32](), normal, y, z, com, com1)
             count += 1
 
 
@@ -1509,6 +1526,8 @@ def contacts(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
             var r1 = mf[pf + 13]; var r2 = mf[pf + 12]
             if Int(mi[GBODY + g1]) == 0:  # a world geom (static sphere) is in world coordinates, the animal's frame is shifted by its floating origin
                 pos1 = pos1 - origin(mi, qpos, f, b)
+            elif Int(mi[ROOT + Int(mi[GBODY + g1])]) != Int(mi[ROOT + b]):  # geom1 on another tree: its frame to b's
+                pos1 = pos1 + (origin(mi, qpos, f, Int(mi[GBODY + g1])) - origin(mi, qpos, f, b))
             var dif = pos2 - pos1
             var cd2 = (dif * dif).reduce_add()
             if cd2 > (margin + r1 + r2) * (margin + r1 + r2):
@@ -1553,6 +1572,7 @@ def contacts(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
         y = y / sqrt((y * y).reduce_add())
         var z = cross(normal, y)
         var com = V3(get(res, f, OSC + 3 * Int(mi[ROOT + b])), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 1), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 2), 0)
+        var com1 = side_com(mi, qpos, res, f, g1, b, com)
         var first = pnt - normal * (0.5 * dist)
         var threshold = (normal * (pos2 - pos1)).reduce_add() - margin
         var count = 0
@@ -1573,7 +1593,7 @@ def contacts(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
             elif dist > margin:
                 break
             var cpos = pnt - normal * (0.5 * dist)
-            emit_contact(mi, mf, qvel, res, f, p, count, cpos, dist, normal, y, z, com)
+            emit_contact(mi, mf, qvel, res, f, p, count, cpos, dist, normal, y, z, com, com1)
             count += 1
         for c in range(count, nslot(mi, res, f, p)):
             res[(OVALID + sbase(mi, res, f, p) + c) * F + f] = 0
