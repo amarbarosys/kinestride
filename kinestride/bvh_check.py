@@ -5,13 +5,15 @@ matrices, its own BVH parser), and MuJoCo's mj_kinematics on the generated MJCF 
 2. MuJoCo xpos / xmat from .qref within the same bars of numpy
 3. contacts equal to numpy's (four foot bodies: within 3 cm of their 10th-percentile z, horizontal speed under 0.5 m/s)
 4. the body stands: head over the toes by more than 1.2 m on average, toes' lowest z within [-0.1, 0.15] m,
-   every body has mass (catches an upside-down or mis-scaled character, which a shared convention would hide)
+   every body has mass, 70 kg in all (MASS default; catches an upside-down or mis-scaled character, which a
+   shared convention would hide)
 
 usage: python -m kinestride.bvh_check BINARY CLIP.bvh
 """
 
 from __future__ import annotations
 
+import os
 import struct
 import subprocess
 import sys
@@ -55,7 +57,7 @@ def parse(path):
     t = int(next(lines).split()[1])
     dt = float(next(lines).split()[2])
     motion = np.array([[float(v) for v in next(lines).split()] for _ in range(t)])
-    return names, parents, np.array(offsets), orders, dt, motion
+    return names, parents, np.array(offsets), orders, dt, motion[int(os.environ.get("FIRST", 1)):][:int(os.environ.get("FRAMES", t))]  # bvh.mojo's FIRST, FRAMES
 
 
 def rot(axis, deg):
@@ -151,9 +153,9 @@ def main() -> None:
     toes = pos[:, [names.index("LeftToeBase"), names.index("RightToeBase")], 2]
     rise = (pos[:, names.index("Head"), 2] - toes.mean(1)).mean()
     low = toes.min()
-    stands = rise > 1.2 and -0.1 <= low <= 0.15 and (model.body_mass[1:] > 0).all()
+    stands = rise > 1.2 and -0.1 <= low <= 0.15 and (model.body_mass[ids] > 0).all() and abs(model.body_mass.sum() - 70) < 0.1
     print(f"{'ok  ' if stands else 'FAIL'} stands: head over toes {rise:.3f} m, lowest toe {low:.3f} m, "
-          f"lightest body {model.body_mass[1:].min():.3g} kg, total {model.body_mass.sum():.1f} kg")
+          f"lightest body {model.body_mass[ids].min():.3g} kg, total {model.body_mass.sum():.1f} kg")
     if not stands:
         fails.append("stands")
 

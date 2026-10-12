@@ -53,9 +53,9 @@ if [ "$stage" = bvh ]; then  # BVH -> MJCF + reference clip (bvh.mojo, CPU build
   for c in 10_01 02_05 60_01 55_22; do
     $M -m kinestride.bvh_check $X/bvh/bvh .work/assets/cmu/$c.bvh || { echo "FAIL bvh $c"; fail=$((fail+1)); }
   done
-  for m in 's/q = qmul(q, a)/q = qmul(a, q)/' 's/vec(to_mj(a), 1)/vec(a, 1)/' 's/ \* pi \/ 180))/))/' \
+  for m in 's/q = qmul(q, a)/q = qmul(a, q)/' 's/vec(to_mj(a), 1)/vec(a, 1)/' 's/var e = 1.0 if j == (i + 1) % 3 else -1.0/var e = 1.0/' \
     's/zs\[(t - 1) \/\/ 10\]/zs[0]/' 's/var mq = qmul(qmul(QC, wq\[j\]), QCI)/var mq = qmul(QC, wq[j])/'; do
-    ~/iTools/bin/mutant-check kinestride/bvh.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$B && $M -m kinestride.bvh_check $X/bvh/bvh .work/assets/cmu/10_01.bvh" || fail=$((fail+1))  # extrinsic Euler, unconverted axes, degrees, min floor, half conjugation
+    ~/iTools/bin/mutant-check kinestride/bvh.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$B && $M -m kinestride.bvh_check $X/bvh/bvh .work/assets/cmu/10_01.bvh" || fail=$((fail+1))  # extrinsic Euler, unconverted axes, Tait-Bryan sign, min floor, half conjugation
   done
   PATH=$PWD/.venv/bin:$PATH bash -c "$B"  # leave the real binary, not the last mutant's
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }

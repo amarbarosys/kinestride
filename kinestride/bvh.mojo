@@ -1,18 +1,20 @@
 """BVH mocap -> an MJCF character and its reference clip (docs/plans/MOTION_DATASET.md, unit 2).
 
-Every BVH joint becomes a body and its rotation channels become hinges in channel order: BVH applies them intrinsically
-(Z Y X: R = Rz Ry Rx) and MuJoCo applies a body's joints in definition order, so a frame's Euler angles ARE the hinge
-qpos. The root's channels become a free joint. BVH is y-up, MuJoCo z-up: C is +90 deg about x, (x, y, z) -> (x, -z, y),
+Every BVH joint becomes a body with three hinges; MuJoCo applies a body's joints in definition order, so hinge angles are
+intrinsic Tait-Bryan angles. Their axis order is chosen per joint away from gimbal lock (hinge_axes) and every frame's
+rotation is re-expressed in it. The root's channels become a free joint. Frames from FIRST (default 1: CMU's
+conversions open on a rest pose), FRAMES of them (default all). BVH is y-up, MuJoCo z-up: C is +90 deg about x, (x, y, z) -> (x, -z, y),
 on offsets, hinge axes and root position; orientations become C q C^-1. Units: SCALE m per BVH unit, default CMU's
 0.056444 ((1 / 0.45) x 2.54 / 100, mocap.cs.cmu.edu FAQ).
 
-usage: bvh mjcf IN.bvh OUT.xml   capsule per bone, a sphere on bodies without one, no self-collision, a floor
+usage: bvh mjcf IN.bvh OUT.xml   a convex capsule mesh per bone (a sphere-like hull on bodies without one), servos,
+                                 floor pairs, no self-collision, root assist (write_mjcf)
        bvh clip IN.bvh OUT       OUT.qref: int32 T, NQ; float32 hz; float32 qpos[T][NQ]
                                  OUT.mclip: forward kinematics of the BVH itself, contacts on the four foot bodies
                                  (z within 3 cm of that body's 10th-percentile z in the clip, horizontal speed under 0.5 m/s)
 build: mojo build -I kinestride kinestride/bvh.mojo
 """
-from std.math import cos, pi, sin, sqrt
+from std.math import asin, atan2, cos, pi, round, sin, sqrt
 from std.os import getenv
 from std.sys import argv
 
@@ -31,6 +33,11 @@ struct Skel(Movable):
     var t: Int
     var hz: Float64
     var motion: List[Float64]  # [t][6 + 3 (joints - 1)]
+
+
+def env(name: String, default: Float64) raises -> Float64:
+    var v = getenv(name)
+    return atof(v) if v != "" else default
 
 
 def parse(path: String) raises -> Skel:
@@ -96,10 +103,12 @@ def parse(path: String) raises -> Skel:
     var nch = 3 + 3 * len(name)
     if len(tok) - i != t * nch:
         raise Error(path + ": " + String(len(tok) - i) + " motion values, expected " + String(t * nch))
-    var motion = List[Float64](capacity=t * nch)
-    for k in range(t * nch):
+    var first = Int(env("FIRST", 1))  # CMU's BVH conversions open on a rest-pose frame, not motion
+    var last = min(t, first + Int(env("FRAMES", Float64(t))))  # FRAMES: a shorter clip for quick gates
+    var motion = List[Float64](capacity=(last - first) * nch)
+    for k in range(first * nch, last * nch):
         motion.append(atof(String(tok[i + k])))
-    return Skel(name^, parent^, offset^, axes^, end_parent^, end_offset^, t, hz, motion^)
+    return Skel(name^, parent^, offset^, axes^, end_parent^, end_offset^, last - first, hz, motion^)
 
 
 def qmul(a: Q, b: Q) -> Q:
@@ -148,46 +157,219 @@ def vec(v: Q, s: Float64) -> String:
     return num(v[1] * s) + " " + num(v[2] * s) + " " + num(v[3] * s)
 
 
+def child(sk: Skel, k: Int) -> Q:
+    """Offset of child k (a joint, or end site k - joints) in its parent's frame, MuJoCo axes, BVH units."""
+    var nj = len(sk.name)
+    if k < nj:
+        return to_mj(Q(0, sk.offset[3 * k], sk.offset[3 * k + 1], sk.offset[3 * k + 2]))
+    var e = k - nj
+    return to_mj(Q(0, sk.end_offset[3 * e], sk.end_offset[3 * e + 1], sk.end_offset[3 * e + 2]))
+
+
+def hull(tip: Q, r: Float64) -> String:
+    """Vertices of a capsule's convex stand-in (body frame, m): a ring of 8 at each end and a pole beyond each end, or 6
+    poles and 8 corners for a sphere (tip 0). Plane-mesh contact is ported; plane-capsule is not."""
+    var pts = List[Q]()
+    var length = sqrt(tip[1] * tip[1] + tip[2] * tip[2] + tip[3] * tip[3])
+    if length == 0:
+        for k in range(3):
+            for sg in range(2):
+                var p = Q(0, 0, 0, 0)
+                p[1 + k] = r if sg == 0 else -r
+                pts.append(p)
+        var c = r / sqrt(3.0)
+        for k in range(8):
+            pts.append(Q(0, c if k & 1 else -c, c if k & 2 else -c, c if k & 4 else -c))
+    else:
+        var u = tip / length
+        var a = Q(0, 0, 1, 0) if abs(u[1]) > 0.9 else Q(0, 1, 0, 0)
+        var v1 = Q(0, u[2] * a[3] - u[3] * a[2], u[3] * a[1] - u[1] * a[3], u[1] * a[2] - u[2] * a[1])
+        v1 = v1 / sqrt(v1[1] * v1[1] + v1[2] * v1[2] + v1[3] * v1[3])
+        var v2 = Q(0, u[2] * v1[3] - u[3] * v1[2], u[3] * v1[1] - u[1] * v1[3], u[1] * v1[2] - u[2] * v1[1])
+        for e in range(2):
+            var o = tip * Float64(e)
+            for k in range(8):
+                var ang = 2 * pi * Float64(k) / 8
+                pts.append(o + v1 * (r * cos(ang)) + v2 * (r * sin(ang)))
+        pts.append(u * -r)
+        pts.append(tip + u * r)
+    var x = String()
+    for p in pts:
+        x += vec(p, 1) + " "
+    return x
+
+
+def rm(q: Q, r: Int, c: Int) -> Float64:
+    """Entry (r, c) of q's rotation matrix."""
+    var w = q[0]
+    if r == c:
+        var a = q[1 + (r + 1) % 3]
+        var b = q[1 + (r + 2) % 3]
+        return 1 - 2 * (a * a + b * b)
+    var k = 3 - r - c  # the third axis
+    var sg = 1.0 if c == (r + 1) % 3 else -1.0  # (0,1) (1,2) (2,0): 2 (ab - w k); the transposes: 2 (ab + w k)
+    return 2 * (q[1 + r] * q[1 + c] - sg * w * q[1 + k])
+
+
+def angles(q: Q, i: Int, j: Int, k: Int) -> Q:
+    """Intrinsic Tait-Bryan angles of q for axes i, j, k (R = Ri(a) Rj(b) Rk(c)), as (a, b, c, 0)."""
+    var e = 1.0 if j == (i + 1) % 3 else -1.0
+    return Q(atan2(-e * rm(q, j, k), rm(q, k, k)), asin(max(-1.0, min(1.0, e * rm(q, i, k)))),
+             atan2(-e * rm(q, i, j), rm(q, i, i)), 0)
+
+
+def hinge_axes(sk: Skel) -> List[Int]:
+    """Per joint, the axis order of its three hinges: of the 6 Tait-Bryan orders, the one whose middle angle stays
+    farthest from +-90 deg (gimbal lock) over the clip. The BVH's own order (Z Y X) sends CMU shoulders and thumbs
+    through lock, where z and x swing by pi between frames."""
+    comptime P: List[Int] = [0, 1, 2, 1, 2, 0, 2, 0, 1, 0, 2, 1, 2, 1, 0, 1, 0, 2]
+    var ax = List[Int](length=3 * len(sk.name), fill=0)
+    for j in range(1, len(sk.name)):
+        var best = 0
+        var worst_best = 10.0
+        for o in range(6):
+            var worst = 0.0
+            for f in range(sk.t):
+                worst = max(worst, abs(angles(euler(sk, j, f), materialize[P]()[3 * o], materialize[P]()[3 * o + 1], materialize[P]()[3 * o + 2])[1]))
+            if worst < worst_best:
+                best = o
+                worst_best = worst
+        for c in range(3):
+            ax[3 * j + c] = materialize[P]()[3 * best + c]
+    return ax^
+
+
+def low_z(sk: Skel, j: Int) raises -> Float64:
+    """Joint j's 10th-percentile height over the clip (m, MuJoCo z): a foot's resting height above the floor."""
+    var s = scale()
+    var nch = 3 + 3 * len(sk.name)
+    var chain = List[Int]()
+    var b = j
+    while b > 0:
+        chain.append(b)
+        b = sk.parent[b]
+    var zs = List[Float64](capacity=sk.t)
+    for f in range(sk.t):
+        var p = Q(0, sk.motion[f * nch] * s, sk.motion[f * nch + 1] * s, sk.motion[f * nch + 2] * s)
+        var q = euler(sk, 0, f)
+        for i in range(len(chain) - 1, -1, -1):
+            var c = chain[i]
+            p = p + rotate(q, sk.offset[3 * c] * s, sk.offset[3 * c + 1] * s, sk.offset[3 * c + 2] * s)
+            q = qmul(q, euler(sk, c, f))
+        zs.append(to_mj(p)[3])
+    sort(zs)
+    return zs[(sk.t - 1) // 10]
+
+
 def write_mjcf(sk: Skel, path: String, model: String) raises:
+    """The character for tracking: a position servo per hinge, floor pairs on every geom, the total mass set to MASS kg,
+    timestep 1 / (SUB x clip hz), and (ASSIST > 0) a mocap body welded to the root with that time constant.
+    Gains follow each hinge's inertia: kp = I w^2 on the servo and damping 2 I w on the joint (critically damped at
+    w = 2 pi OMEGA Hz; joint damping, unlike a servo's kv, is implicit under Euler, which the assist weld requires),
+    I = the subtree's geoms as point masses about the hinge's axis line in the rest pose, plus armature."""
     var s = scale()
     var nj = len(sk.name)
+    var ax = hinge_axes(sk)
+    var mass = env("MASS", 70)
+    var omega = 2 * pi * env("OMEGA", 10)
+    var assist = env("ASSIST", 0.005)
+    var arm = 0.01
+    # geoms: body, tip (body frame, m; 0 for a sphere at the origin), radius; rest pose of every body origin
+    var gbody = List[Int]()
+    var gtip = List[Q]()
+    var grad = List[Float64]()
+    var rest = List[Q](length=nj, fill=Q(0, 0, 0, 0))
+    for j in range(nj):
+        if j > 0:
+            rest[j] = rest[sk.parent[j]] + child(sk, j) * s
+        var bones = 0
+        var foot = 0.0  # a foot's bone reaches the floor: radius = the joint's resting height
+        for name in materialize[FEET]():
+            if sk.name[j] == name:
+                foot = low_z(sk, j)
+        for k in range(nj + len(sk.end_parent)):
+            if (sk.parent[k] if k < nj else sk.end_parent[k - nj]) != j:
+                continue
+            var c = child(sk, k) * s
+            var length = sqrt(c[1] * c[1] + c[2] * c[2] + c[3] * c[3])
+            if length < 1e-6:
+                continue
+            gbody.append(j)
+            gtip.append(c)
+            grad.append(min(max(foot if foot > 0 else 0.2 * length, 0.015 if foot == 0 else 0.02), 0.06))
+            bones += 1
+        if bones == 0:
+            gbody.append(j)
+            gtip.append(Q(0, 0, 0, 0))
+            grad.append(0.03)
+    var ng = len(gbody)
+    var gmass = List[Float64](capacity=ng)
+    var raw = 0.0
+    for g in range(ng):
+        var t = gtip[g]
+        var r = grad[g]
+        var length = sqrt(t[1] * t[1] + t[2] * t[2] + t[3] * t[3])  # hull volume: octagon prism + a pyramid to each pole,
+        gmass.append(1000 * (2 * sqrt(2.0) * r * r * (length + 2 * r / 3) if length > 0 else 8 / 3 * r * r * r))  # or cube + 6 pyramids
+        raw += gmass[g]
+    var density = 1000 * mass / raw
+    var inertia = List[Float64](length=3 * nj, fill=arm)  # per hinge: subtree geoms as point masses about its axis line, rest pose
+    for j in range(1, nj):
+        for c in range(3):
+            var a = Q(0, 0, 0, 0)
+            a[1 + ax[3 * j + c]] = 1
+            a = to_mj(a)
+            for k in range(ng):
+                var b = gbody[k]
+                while b > j:
+                    b = sk.parent[b]
+                if b == j:
+                    var d = rest[gbody[k]] + gtip[k] * 0.5 - rest[j]
+                    var along = d[1] * a[1] + d[2] * a[2] + d[3] * a[3]
+                    inertia[3 * j + c] += gmass[k] * density / 1000 * (d[1] * d[1] + d[2] * d[2] + d[3] * d[3] - along * along)
     var x = String('<mujoco model="') + model + '">\n  <compiler angle="radian"/>\n'
-    x += '  <default>\n    <joint damping="0.5" armature="0.01"/>\n    <geom contype="1" conaffinity="0" density="1000"/>\n  </default>\n'
-    x += '  <worldbody>\n    <geom name="floor" type="plane" size="0 0 1" contype="0" conaffinity="1"/>\n'
+    x += '  <option timestep="' + num(1 / (sk.hz * env("SUB", 4))) + '"/>\n'
+    x += '  <default>\n    <joint armature="' + num(arm) + '"/>\n    <geom contype="0" conaffinity="0" density="' + num(density) + '"/>\n  </default>\n'
+    x += "  <asset>\n"
+    for k in range(ng):
+        x += '    <mesh name="m' + String(k) + '" vertex="' + hull(gtip[k], grad[k]) + '"/>\n'
+    x += "  </asset>\n"
+    x += '  <worldbody>\n    <geom name="floor" type="plane" size="0 0 1"/>\n'
     var stack = List[Int]()
+    var g = 0
     for j in range(nj):
         while len(stack) > 0 and stack[len(stack) - 1] != sk.parent[j]:
             _ = stack.pop()
             x += "  " * (len(stack) + 2) + "</body>\n"
         var ind = "  " * (len(stack) + 2)
-        var o = to_mj(Q(0, sk.offset[3 * j], sk.offset[3 * j + 1], sk.offset[3 * j + 2]))
-        x += ind + '<body name="' + sk.name[j] + '" pos="' + (vec(o, s) if j > 0 else "0 0 1") + '">\n'
+        x += ind + '<body name="' + sk.name[j] + '" pos="' + (vec(child(sk, j), s) if j > 0 else "0 0 1") + '">\n'
         if j == 0:
             x += ind + '  <freejoint name="root"/>\n'
         else:
             for c in range(3):
                 var a = Q(0, 0, 0, 0)
-                a[1 + sk.axes[3 * j + c]] = 1
-                x += ind + '  <joint name="' + sk.name[j] + "_" + ["x", "y", "z"][sk.axes[3 * j + c]] + '" axis="' + vec(to_mj(a), 1) + '"/>\n'
-        var bones = 0
-        for k in range(nj + len(sk.end_parent)):  # child joints, then end sites
-            var e = k - nj
-            if (sk.parent[k] if e < 0 else sk.end_parent[e]) != j:
-                continue
-            var c = Q(0, sk.offset[3 * k], sk.offset[3 * k + 1], sk.offset[3 * k + 2]) if e < 0 else Q(
-                0, sk.end_offset[3 * e], sk.end_offset[3 * e + 1], sk.end_offset[3 * e + 2])
-            var length = sqrt(c[1] * c[1] + c[2] * c[2] + c[3] * c[3]) * s
-            if length < 1e-6:
-                continue
-            x += ind + '  <geom type="capsule" fromto="0 0 0 ' + vec(to_mj(c), s) + '" size="' + num(min(max(0.2 * length, 0.015), 0.06)) + '"/>\n'
-            bones += 1
-        if bones == 0:
-            x += ind + '  <geom type="sphere" size="0.03"/>\n'
+                a[1 + ax[3 * j + c]] = 1
+                x += ind + '  <joint name="' + sk.name[j] + "_" + ["x", "y", "z"][ax[3 * j + c]] + '" axis="' + vec(to_mj(a), 1) + '" damping="' + num(2 * inertia[3 * j + c] * omega) + '"/>\n'
+        while g < ng and gbody[g] == j:
+            x += ind + '  <geom name="g' + String(g) + '" type="mesh" mesh="m' + String(g) + '"/>\n'
+            g += 1
         stack.append(j)
     while len(stack) > 0:
         _ = stack.pop()
         x += "  " * (len(stack) + 2) + "</body>\n"
-    x += "  </worldbody>\n</mujoco>\n"
+    if assist > 0:
+        x += '    <body name="assist" mocap="true" pos="0 0 1"><geom type="sphere" size="0.01" mass="0"/></body>\n'
+    x += "  </worldbody>\n  <contact>\n"
+    for k in range(ng):
+        x += '    <pair geom1="floor" geom2="g' + String(k) + '"/>\n'
+    x += "  </contact>\n  <actuator>\n"
+    for j in range(1, nj):
+        for c in range(3):
+            var jn = sk.name[j] + "_" + ["x", "y", "z"][ax[3 * j + c]]
+            x += '    <position joint="' + jn + '" kp="' + num(inertia[3 * j + c] * omega * omega) + '"/>\n'
+    x += "  </actuator>\n"
+    if assist > 0:
+        x += '  <equality>\n    <weld body1="' + sk.name[0] + '" body2="assist" solref="' + num(assist) + ' 1"/>\n  </equality>\n'
+    x += "</mujoco>\n"
     var fh = open(path, "w")
     fh.write(x)
 
@@ -199,6 +381,7 @@ def write_f32(mut fh: FileHandle, v: List[Float32]) raises:
 def write_clip(sk: Skel, dst: String) raises:
     var s = scale()
     var nj = len(sk.name)
+    var ax = hinge_axes(sk)
     var t = sk.t
     var nq = 7 + 3 * (nj - 1)
     var nch = 3 + 3 * nj
@@ -207,6 +390,7 @@ def write_clip(sk: Skel, dst: String) raises:
     var quat = List[Float32](capacity=t * nj * 4)
     var wq = List[Q](length=nj, fill=Q(1, 0, 0, 0))
     var wp = List[Q](length=nj, fill=Q(0, 0, 0, 0))
+    var last = List[Float64](length=3 * nj, fill=0.0)
     for f in range(t):
         for j in range(nj):
             var q = euler(sk, j, f)
@@ -229,9 +413,28 @@ def write_clip(sk: Skel, dst: String) raises:
                     qref.append(Float32(mp[1 + k]))
                 for k in range(4):
                     qref.append(Float32(mq[k]))
-            else:
+            else:  # hinge qpos in hinge_axes' order, continuous: of the two solutions for one rotation, (a, b, c) and
+                # (a + pi, pi - b, c + pi), each unwrapped by whole turns, the one nearer the previous frame
+                var best = Q(0, 0, 0, 0)
+                var dbest = 1e30
+                for alt in range(2):
+                    var cand = Q(0, 0, 0, 0)
+                    var dist = 0.0
+                    var e3 = angles(q, ax[3 * j], ax[3 * j + 1], ax[3 * j + 2])
+                    for c in range(3):
+                        var ang = e3[c]
+                        if alt == 1:
+                            ang = (pi - ang) if c == 1 else ang + pi
+                        if f > 0:
+                            ang += 2 * pi * round((last[3 * j + c] - ang) / (2 * pi))
+                            dist += abs(ang - last[3 * j + c])
+                        cand[c] = ang
+                    if dist < dbest:
+                        best = cand
+                        dbest = dist
                 for c in range(3):
-                    qref.append(Float32(sk.motion[f * nch + 3 + 3 * j + c] * pi / 180))
+                    last[3 * j + c] = best[c]
+                    qref.append(Float32(best[c]))
     var feet = List[Int]()
     for name in materialize[FEET]():
         for j in range(nj):
