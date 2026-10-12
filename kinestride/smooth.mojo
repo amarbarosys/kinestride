@@ -116,7 +116,8 @@ comptime CEQM = CEQC + NEQCH
 # mocap bodies (model.py mocap_block, after the equality block): body_mocapid per body; each animal's mocap pose (pos 3,
 # quat 4 per mocap body) rides in rows NU.. of ctrl.bin
 comptime NMOCAP = get_defined_int["NMOCAP", 0]()
-comptime NUC = NU + 7 * NMOCAP
+comptime NXF = get_defined_int["NXF", 0]()  # MuJoCo xfrc_applied, sparse: slots per animal in ctrl.bin after the mocap rows, each body id, force 3, torque 3
+comptime NUC = NU + 7 * NMOCAP + 7 * NXF
 comptime CMOC = CEQM + NEQCH
 # gravcomp (model.py gravcomp_block, last): ints jnt_actgravcomp per joint, floats body_gravcomp per body
 comptime GRAVCOMP = get_defined_int["GRAVCOMP", 0]() == 1
@@ -288,7 +289,8 @@ comptime OGZ = OGA + NEFC
 comptime SOLROWS = 3 * NV if SOLVER == 1 else (3 * NEFC + NV if SOLVER == 0 else 0)
 comptime OGAME = OSOL + SOLROWS  # GAME: four float32 rows per animal, energy health stamina dead; all zero = not started
 comptime OSLP = OGAME + (4 if GAME else 0)  # SLEEP: quiet checks in a row (MuJoCo tree_asleep + 11), SLEPT once asleep
-comptime NROW = OSLP + (1 if SLEEP else 0)
+comptime OQAPP = OSLP + (1 if SLEEP else 0)  # NXF: qfrc_applied (MuJoCo mj_xfrcAccumulate), NV rows
+comptime NROW = OQAPP + (NV if NXF > 0 else 0)
 comptime SLEPT: Float32 = 11  # one past mjMINAWAKE (10) quiet checks
 comptime LI = row_major[NI]()
 comptime LF = row_major[NFL]()
@@ -1245,6 +1247,38 @@ def terrain(mf: TF) -> PW:
     for k in range(NP):
         p[k] = mf[HFO + k]
     return p
+
+
+@always_inline
+def qsmooth(res: TO, f: Int, v: Int) -> Float32:
+    """qfrc_passive - qfrc_bias, + qfrc_applied when NXF: MuJoCo qfrc_smooth before actuation and constraints."""
+    var q = get(res, f, OPAS + v) - get(res, f, OBIAS + v)
+    comptime if NXF > 0:
+        q += get(res, f, OQAPP + v)
+    return q
+
+
+def xfrc(mi: TI, ctrl: TU, res: TO, f: Int):
+    """MuJoCo mj_xfrcAccumulate: each slot's force and torque at its body's xipos through mj_applyFT into qfrc_applied,
+    qfrc[d] = cdof_lin . force + cdof_ang . (torque + (xipos - subtree_com[root]) x force) over the body's dof chain (frames
+    relative to the tree's floating origin, as both rows are before absolute()). Body id 0: an empty slot."""
+    for v in range(NV):
+        res[(OQAPP + v) * F + f] = 0
+    for k in range(NXF):
+        var row = NU + 7 * NMOCAP + 7 * k
+        var b = Int(ctrl[row * F + f])
+        if b <= 0:
+            continue
+        var fo = V3(ctrl[(row + 1) * F + f], ctrl[(row + 2) * F + f], ctrl[(row + 3) * F + f], 0)
+        var r = 3 * Int(mi[ROOT + b])
+        var off = V3(get(res, f, OXI + 3 * (b - 1)), get(res, f, OXI + 3 * (b - 1) + 1), get(res, f, OXI + 3 * (b - 1) + 2), 0) - V3(get(res, f, OSC + r), get(res, f, OSC + r + 1), get(res, f, OSC + r + 2), 0)
+        var tq = V3(ctrl[(row + 4) * F + f], ctrl[(row + 5) * F + f], ctrl[(row + 6) * F + f], 0) + cross(off, fo)
+        var bb = b
+        while bb > 0:
+            for d in range(Int(mi[BDOFADR + bb]), Int(mi[BDOFADR + bb]) + Int(mi[BDOFNUM + bb])):
+                var cd = OCD + 6 * d
+                res[(OQAPP + d) * F + f] += (V3(get(res, f, cd), get(res, f, cd + 1), get(res, f, cd + 2), 0) * tq).reduce_add() + (V3(get(res, f, cd + 3), get(res, f, cd + 4), get(res, f, cd + 5), 0) * fo).reduce_add()
+            bb = Int(mi[PARENT + bb])
 
 
 @always_inline
@@ -2307,7 +2341,7 @@ def pgs(mi: TI, mf: TF, res: TO, f: Int):
     force = -D jar at qacc_warmstart, zero when its dual cost f.b + f.AR.f / 2 is positive. Then mj_dualFinish; the result
     is left in Newton's representation (OST, OJAR = -f / D, OQFC = J' f, OCQACC) so noslip continues from it unchanged."""
     for v in range(NV):
-        res[(OQSM + v) * F + f] = get(res, f, OPAS + v) - get(res, f, OBIAS + v)
+        res[(OQSM + v) * F + f] = qsmooth(res, f, v)
         comptime if STAGE >= 7:
             res[(OQSM + v) * F + f] += get(res, f, OQACT + v)
         res[(OQACCS + v) * F + f] = get(res, f, OQSM + v)
@@ -2442,7 +2476,7 @@ def newton(mi: TI, mf: TF, res: TO, f: Int):
     """MuJoCo mj_solPrimal (Newton), one island: start at qacc_smooth, line search, Hessian rebuilt when the
     active set changes (MuJoCo updates it incrementally; same matrix)."""
     for v in range(NV):
-        res[(OQSM + v) * F + f] = get(res, f, OPAS + v) - get(res, f, OBIAS + v)
+        res[(OQSM + v) * F + f] = qsmooth(res, f, v)
         comptime if STAGE >= 7:
             res[(OQSM + v) * F + f] += get(res, f, OQACT + v)
         res[(OQACCS + v) * F + f] = get(res, f, OQSM + v)
@@ -3440,7 +3474,7 @@ def euler(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
                 res[(OQH + Int(mi[MADR + dof]) + Int(mi[MNNZ + dof]) - 1) * F + f] -= h * mf[af + 8] * mf[af + 8] * mf[af + 3]
         factorI(mi, res, f, OQH, OQHI)
     for v in range(NV):
-        res[(OQACC + v) * F + f] = get(res, f, OPAS + v) - get(res, f, OBIAS + v)
+        res[(OQACC + v) * F + f] = qsmooth(res, f, v)
         comptime if STAGE >= 6:
             res[(OQACC + v) * F + f] += get(res, f, OQFC + v)
         comptime if STAGE >= 7:
@@ -3536,7 +3570,7 @@ def rkstage(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, s: Int):
             res[(ORKF + s * NV + v) * F + f] = get(res, f, OCQACC + v)
     else:  # contact-free: qacc_smooth = M^-1 (qfrc_passive - qfrc_bias)
         for v in range(NV):
-            res[(OQACC + v) * F + f] = get(res, f, OPAS + v) - get(res, f, OBIAS + v)
+            res[(OQACC + v) * F + f] = qsmooth(res, f, v)
         solveLD(mi, res, f, OQACC, OLD, OLDI)
         for v in range(NV):
             res[(ORKF + s * NV + v) * F + f] = get(res, f, OQACC + v)
@@ -3817,6 +3851,8 @@ def step(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int, rks: Int
         return
     comptime if STAGE >= 4:
         velocity(mi, mf, qpos, qvel, res, f)
+        comptime if NXF > 0:
+            xfrc(mi, ctrl, res, f)
     comptime if STOP == 4:
         return
     comptime if STAGE >= 6:
