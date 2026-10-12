@@ -11,7 +11,7 @@ tiers (each 0.75 of the one below).
 materials: 0 sky (miss), 1 road, 2 sidewalk, 3-6 facade palettes.
 
 """
-from std.math import atan2, cos, floor, sin, sqrt
+from std.math import cos, floor, sin, sqrt
 
 from world import hash
 
@@ -89,6 +89,28 @@ def frac(n: Int, t: Int) -> Float32:
 
 def scale(t: Int) -> Float32:
     return Float32(1) if t == 0 else (Float32(0.75) if t == 1 else Float32(0.5625))
+
+
+def atan2(y: Float32, x: Float32) -> Float32:
+    """atan2 for the card too (libm's atan2f does not link on amdgpu): octant reduction, a pi/8 split, then the odd
+    series to t^15 (truncation < 2e-8 rad, under float32 rounding)."""
+    var ax = abs(x)
+    var ay = abs(y)
+    var big = max(ax, ay)
+    if big == 0:
+        return 0
+    var t = min(ax, ay) / big
+    var off = Float32(0)
+    if t > 0.41421356:
+        t = (t - 1) / (t + 1)
+        off = 0.78539816
+    var t2 = t * t
+    var r = off + t * (1 + t2 * (-1.0 / 3 + t2 * (1.0 / 5 + t2 * (-1.0 / 7 + t2 * (1.0 / 9 + t2 * (-1.0 / 11 + t2 * (1.0 / 13 - t2 / 15)))))))
+    if ay > ax:
+        r = 1.57079633 - r
+    if x < 0:
+        r = 3.14159265 - r
+    return -r if y < 0 else r
 
 
 def edge(x: Float32, y: Float32, R: Float32, k: Float32, a: Float32, phi: Float32) -> Float32:

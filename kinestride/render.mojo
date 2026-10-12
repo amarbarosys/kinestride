@@ -17,7 +17,7 @@ Per frame, five passes and no allocation:
           (AA=1) average 4 analytic sub-rays against the triangles of their 3x3 neighbourhood
 then the RGBA8 image goes to a pinned host buffer allocated once.
 
-usage: render RENDER_DIR/ POSES.bin OUT FRAMES ex ey ez tx ty tz fovy_deg spacing
+usage: render RENDER_DIR/ POSES.bin OUT FRAMES ex ey ez tx ty tz fovy_deg spacing [seed ox oy far: -DCITY=1]
        OUT: .ppm image, .rgba raw (alpha 255 on animals), or - to stream raw RGBA frames to stdout while the
        camera orbits the target 1 degree a frame (FRAMES 0 = until the reader closes the pipe), e.g.
        render ... - 0 ... | mpv --demuxer=rawvideo --demuxer-rawvideo-w=W --demuxer-rawvideo-h=H
@@ -26,7 +26,7 @@ usage: render RENDER_DIR/ POSES.bin OUT FRAMES ex ey ez tx ty tz fovy_deg spacin
 """
 from std.atomic import Atomic, Ordering
 from std.ffi import external_call
-from std.math import cos, exp, sin, sqrt, tan
+from std.math import cos, exp, floor, sin, sqrt, tan
 from std.memory import bitcast
 from std.sys import argv, get_defined_int
 from std.time import perf_counter_ns
@@ -34,6 +34,7 @@ from max.gpu import block_idx, block_dim, thread_idx
 from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
+from city import city_hit
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -75,10 +76,12 @@ comptime NCAM = 16 + NP  # eye 3, target 3, fovy, focal, ..., [10] grid spacing;
 comptime LCAM = row_major[NCAM]()
 comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the terrain instead of the grey checker (gates keep the checker)
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
+comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's endless city, 1 unit = 1 m (cam[16:20]: seed, origin cell x y, far m)
+comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
 comptime AA = get_defined_int["AA", 1]()  # 1: silhouette pixels average 4 analytic sub-rays
 comptime GLASS = get_defined_int["GLASS", 1]()  # 1: see-through parts (alpha < 1: wings) in their own layer, blended over the scene
-comptime REFLECT = get_defined_int["REFLECT", 1]() if TERRAIN == 0 and get_defined_int["BOX_MM", 0]() == 0 else 0  # flat floor mirror
+comptime REFLECT = get_defined_int["REFLECT", 1]() if TERRAIN == 0 and CITY == 0 and get_defined_int["BOX_MM", 0]() == 0 else 0  # flat floor mirror
 comptime REFL = Float32(0.2)  # floor reflectance (MuJoCo's grid material)
 comptime OGL = W * H if SHADOW == 2 else 0  # aux layers in sm, each W x H (raster is compiled for W x H): shadow map at 0,
 comptime OMR = OGL + (W * H if GLASS else 0)  # then the glass layer at OGL, the mirror layer at OMR
@@ -348,6 +351,57 @@ def depth(key: UInt64) -> Float32:
 
 
 @always_inline
+def city(cam: TCAM, eye: V3, ray: V3) -> SIMD[DType.float32, 8]:
+    """city.mojo's first surface along ray (any length): t as this ray's parameter (3.4e38: none), normal, material."""
+    var l = sqrt(dot(ray, ray))
+    var h = city_hit(UInt32(Int(cam[16])), Int(cam[17]), Int(cam[18]), eye, ray / l, cam[19])
+    h[0] = h[0] / l if h[0] < 1e30 else Float32(3.4e38)
+    return h
+
+
+@always_inline
+def street(sm: TVIS, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32, 8], ao: Float32) -> V3:
+    """Linear colour of a city surface: facades (4 palettes) with windows on 3.5 m floors and 2.5 m bays above the
+    ground floor, roofs, sidewalk tiles, asphalt with a dashed centre line between blocks; the sun shadow from one
+    ray through city_hit (and the shadow map for the animals); fog to cam[19]."""
+    var hit = eye + ray * h[0]
+    var n = V3(h[1], h[2], h[3], 0)
+    var mat = Int(h[4])
+    var base = V3(0.22, 0.22, 0.23, 0)  # asphalt
+    var spec = Float32(0)
+    if mat >= 3:
+        base = V3(0.62, 0.58, 0.52, 0) if mat == 3 else (V3(0.45, 0.47, 0.52, 0) if mat == 4 else (V3(0.66, 0.42, 0.32, 0) if mat == 5 else V3(0.78, 0.76, 0.70, 0)))
+        if n[2] > 0.5:
+            base = V3(0.42, 0.42, 0.40, 0)
+        elif abs(n[2]) < 0.5:
+            var u = hit[1] * n[0] - hit[0] * n[1]  # along the wall
+            var fu = u / 2.5 - floor(u / 2.5)
+            var fz = hit[2] / 3.5 - floor(hit[2] / 3.5)
+            if hit[2] > 3.5 and fu > 0.18 and fu < 0.82 and fz > 0.25 and fz < 0.85:
+                base = V3(0.16, 0.20, 0.26, 0)
+                spec = 0.6
+    elif mat == 2:
+        var tile = (Int(floor(hit[0] * 0.5)) + Int(floor(hit[1] * 0.5))) % 2
+        base = V3(0.66, 0.65, 0.62, 0) * (Float32(0.92) if tile == 0 else Float32(1))
+    else:  # a street between blocks (not a crossing) gets its centre line: the cell edge, + 4 m on an avenue
+        var ex = floor(hit[0] / 64 + 0.5)
+        var ey = floor(hit[1] / 64 + 0.5)
+        var u = hit[0] - (ex * 64 + (Float32(4) if (Int(ex) + Int(cam[17])) % 8 == 0 else Float32(0)))
+        var v = hit[1] - (ey * 64 + (Float32(4) if (Int(ey) + Int(cam[18])) % 8 == 0 else Float32(0)))
+        var dash = hit[0] / 6 - floor(hit[0] / 6) < 0.5 if abs(v) < abs(u) else hit[1] / 6 - floor(hit[1] / 6) < 0.5
+        if dash and min(abs(u), abs(v)) < 0.12 and max(abs(u), abs(v)) > 12:
+            base = V3(0.85, 0.75, 0.30, 0)
+    var lit = Float32(1)
+    if city(cam, hit + n * 0.05, sun())[0] < 3.4e38:
+        lit = 0
+    comptime if SHADOW == 2:
+        lit = min(lit, shadow_map(sm, cam, hit, EMPTY, dot(n, sun())))
+    var col = light(base * base, n, unit(ray), lit, ao, spec)
+    var fade = exp(-3 * h[0] * sqrt(dot(ray, ray)) / cam[19])
+    return col * fade + V3(0.36, 0.4225, 0.5184, 0) * (1 - fade)
+
+
+@always_inline
 def ground_hit(cam: TCAM, eye: V3, ray: V3) -> Tuple[Float32, Int]:
     """Ray parameter of the floor, terrain or box wall (3.4e38: none) and the box face (BOX: 0, 1 x walls, 2, 3 y, 4 floor, 5 ceiling)."""
     var tmin = Float32(3.4e38)
@@ -362,6 +416,8 @@ def ground_hit(cam: TCAM, eye: V3, ray: V3) -> Tuple[Float32, Int]:
                     face = 2 * a + (1 if ray[a] > 0 else 0)
     elif TERRAIN:
         tmin = ground(cam, eye, ray)
+    elif CITY:
+        tmin = city(cam, eye, ray)[0]
     else:
         if ray[2] < 0:
             tmin = -eye[2] / ray[2]
@@ -509,6 +565,11 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
            key: UInt64, tt: Float32, ao: Float32, mk: UInt64) -> V3:
     """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
     else the ground or box (the flat floor mixes in the mirror layer's key mk at REFL), else the sky. Fog: ground only."""
+    comptime if CITY:
+        var h = city(cam, eye, ray)
+        if key != EMPTY and tt < h[0]:
+            return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False)
+        return street(sm, cam, eye, ray, h, ao) if h[0] < 3.4e38 else sky(unit(ray))
     var g = ground_hit(cam, eye, ray)
     var view = unit(ray)
     var fogc = V3(0.36, 0.4225, 0.5184, 0)  # horizon colour, linear
@@ -557,6 +618,9 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
     var ray = c[3] * c[4] + c[1] * px - c[2] * py
     var key = vis[i]
     var g = ground_hit(cam, c[0], ray)
+    comptime if CITY_DEPTH:
+        img[i] = bitcast[DType.uint32](g[0] * sqrt(dot(ray, ray)) if g[0] < 3.4e38 else Float32(1e30))
+        return
     var front = key != EMPTY and depth(key) < g[0] * c[4]  # raster depth is view z = ray parameter x focal
     var z0 = depth(key) if front else g[0] * c[4]
     var mk = sm.ptr.unsafe_offset(OMR + i)[] if REFLECT else EMPTY
@@ -687,6 +751,9 @@ def main() raises:
     camh[6] = fovy
     camh[7] = Float32(H) * 0.5 / tan(fovy * 0.5)
     camh[10] = Float32(atof(String(a[12])))
+    comptime if CITY:  # seed, origin cell x y, far m (default 1 0 0 1500)
+        for k in range(4):
+            camh[16 + k] = Float32(atof(String(a[13 + k]))) if len(a) > 16 else (Float32(1500) if k == 3 else Float32(1 if k == 0 else 0))
     # MAX pre-reserves most of the card per process by default (22.7 GB measured). Every buffer here is made
     # once, so no pool: VRAM is then exactly the buffers plus the HIP runtime (152 MB). A caller's setting wins.
     _ = external_call["setenv", Int32]("MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE_PERCENT".unsafe_ptr(), "0".unsafe_ptr(), Int32(0))

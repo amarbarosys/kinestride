@@ -2,17 +2,18 @@
 1. no surface before a hit, every hit real: each ray's analytic hit against a 2 cm point march over city_height
 2. a whole-cell rebase (origin one cell east, eyes 64 m west) gives the same hits, 10^6 m out
 3. streets stay clear: no building top on the street strips
+5. city.mojo's atan2 (the card has no libm atan2f) within 5e-7 rad of libm
 4. a golden snapshot of hits and building tops (city_golden.bin, written by the version that matched a numpy twin
    on 1.75e5 rays to the 6 mm polar bisection bracket, materials equal)
 
-usage: city_check GOLDEN   |   city_check write GOLDEN
+usage: city_check GOLDEN   |   city_check write GOLDEN   |   city_check frame DEPTH W H ex ey ez tx ty tz fovy seed ox oy far
 build: mojo build -I kinestride kinestride/city_check.mojo
 """
-from std.math import cos, sin, sqrt
+from std.math import atan2 as libm_atan2, cos, sin, sqrt, tan
 from std.memory import bitcast
 from std.sys import argv, exit, stderr
 
-from city import BIG, CELL, F4, F8, STREET, TAU, city_height, city_hit
+from city import BIG, CELL, F4, F8, STREET, TAU, atan2, city_height, city_hit
 from world import hash
 
 comptime SEED = UInt32(1)
@@ -113,6 +114,16 @@ def streets(n: Int) -> Int:
     return 0 if bad == 0 else 1
 
 
+def angles(n: Int) -> Int:
+    var worst = Float32(0)
+    for i in range(n):
+        var y = 2 * u(i, 11) - 1
+        var x = 2 * u(i, 12) - 1
+        worst = max(worst, abs(atan2(y, x) - libm_atan2(y, x)))
+    print("PASS" if worst < 5e-7 else "FAIL", "atan2 vs libm:", n, "points, max abs err", worst, "rad")
+    return 0 if worst < 5e-7 else 1
+
+
 def snapshot() -> List[Float32]:
     """512 hits at the origin and 512 at 10^6 m (t, normal, material), then 1024 building tops."""
     var v = List[Float32]()
@@ -150,8 +161,53 @@ def golden(path: String) raises -> Int:
     return 0 if ok else 1
 
 
+def frame(a: List[String]) raises -> Int:
+    """render.mojo -DCITY=1 -DCITY_DEPTH=1 output (W x H float32 hit distances, 1e30 none) against city_hit on the
+    CPU for the same camera rays: miss mask within 0.2% of pixels, t within 1e-4 relative on 99.5% of the hits."""
+    var b = open(a[2], "r").read_bytes()
+    var w = Int(a[3])
+    var hh = Int(a[4])
+    var eye = F4(Float32(Float64(a[5])), Float32(Float64(a[6])), Float32(Float64(a[7])), 0)
+    var fw = F4(Float32(Float64(a[8])), Float32(Float64(a[9])), Float32(Float64(a[10])), 0) - eye
+    fw = fw / sqrt(fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2])
+    var right = F4(fw[1], -fw[0], 0, 0)  # cross(fw, z)
+    right = right / sqrt(right[0] * right[0] + right[1] * right[1])
+    var up = F4(right[1] * fw[2], -right[0] * fw[2], right[0] * fw[1] - right[1] * fw[0], 0)  # cross(right, fw)
+    var fovy = Float32(Float64(a[11])) * 3.14159265 / 180
+    var focal = Float32(hh) * 0.5 / tan(fovy * 0.5)
+    var seed = UInt32(Int(a[12]))
+    var ox = Int(a[13])
+    var oy = Int(a[14])
+    var far = Float32(Float64(a[15]))
+    var mask = 0
+    var off = 0
+    var hits = 0
+    for i in range(w * hh):
+        var q = 4 * i
+        var got = bitcast[DType.float32](UInt32(b[q]) | (UInt32(b[q + 1]) << 8) | (UInt32(b[q + 2]) << 16) | (UInt32(b[q + 3]) << 24))
+        var px = Float32(i % w) + 0.5 - Float32(w) * 0.5
+        var py = Float32(i // w) + 0.5 - Float32(hh) * 0.5
+        var ray = fw * focal + right * px - up * py
+        var want = city_hit(seed, ox, oy, eye, ray / sqrt(ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]), far)[0]
+        if (got < 1e30) != (want < BIG):
+            mask += 1
+        elif want < BIG:
+            hits += 1
+            off += Int(abs(got - want) > 1e-4 * max(want, 1))
+    var ok = mask * 500 <= w * hh and off * 200 <= hits and hits * 4 >= w * hh
+    print("PASS" if ok else "FAIL", "GPU city depth vs CPU city_hit:", w, "x", hh, ",", hits, "hit pixels,", mask, "mask off,", off, "t off 1e-4")
+    return 0 if ok else 1
+
+
 def main() raises:
     var a = argv()
+    if len(a) == 16 and a[1] == "frame":
+        var s = List[String]()
+        for x in a:
+            s.append(String(x))
+        if frame(s):
+            exit(1)
+        return
     if len(a) == 3 and a[1] == "write":
         var v = snapshot()
         with open(String(a[2]), "w") as f:
@@ -161,7 +217,7 @@ def main() raises:
     if len(a) != 2:
         print("usage: city_check GOLDEN | city_check write GOLDEN", file=stderr)
         exit(2)
-    var bad = march(2000) + rebase(20000) + streets(20000) + golden(String(a[1]))
+    var bad = march(2000) + rebase(20000) + streets(20000) + angles(200000) + golden(String(a[1]))
     if bad:
         print("FAIL city check:", bad, "checks", file=stderr)
         exit(1)
