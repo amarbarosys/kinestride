@@ -465,6 +465,9 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     else:
         var a = lw_albedo(T, u[0], u[1])
         var grain = 0.85 + 0.3 * vnoise(hit[0] * 1.3, hit[1] * 1.3)  # the web's detail, per pixel
+        var far = min(max((h[0] * sqrt(dot(ray, ray)) - 100) / 100, Float32(0)), Float32(1))  # past 100-200 m
+        var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1))  # dark green: a stand's crowns
+        grain = grain * (1 - canopy) + canopy * (0.55 + 0.9 * vnoise(hit[0] * 0.17, hit[1] * 0.17) * vnoise(hit[0] * 0.5 + 7, hit[1] * 0.5))  # 6 m crowns, gaps
         var base = V3(a[0], a[1], a[2], 0) * grain
         col = light(cam, base * base, n, view, sh, ao * a[3], 0)
     var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
