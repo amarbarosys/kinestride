@@ -1,14 +1,15 @@
-"""Living World as a Kinestride ground: a baked 128 x 128 torus (browser-games/living-world, tools/export_bin.mjs) read
-from one float32 table, so the renderer and the walker evaluate the same surface. living_check.mojo is the gate.
+"""Living World as a Kinestride ground: a baked torus (browser-games/living-world, tools/export_bin.mjs, docs/SCALE.md)
+read from one float32 table, so the renderer and the walker evaluate the same surface. living_check.mojo is the gate.
 
-Table: header [N, sea, ntrees, 0], then 5 floats per cell k = j N + i: height | rgb + ao bytes | horizon azimuths 0-3
-bytes | 4-7 bytes | tree bytes (kind + 1, size x 100, x and y in the cell x 255). Units: one cell = one world unit; the
-caller scales (render.mojo: LIVING_M metres per unit). Positions are unwrapped; the table index wraps (a torus).
+Table: header [N, sea, C, TN]; 4 floats per terrain cell k = j N + i (height | rgb + ao bytes | horizon azimuths 0-3 |
+4-7); then a TN x TN grid of tree slots (kind + 1, height / 40 m x 255, x and y in the slot x 255). Lengths are in
+terrain cells of C metres (render.mojo cam[16] = C), so x, y and z share one factor. Positions are unwrapped; indices
+wrap (a torus).
 
-Surface: each cell is two triangles split on its (0, 0)-(1, 1) diagonal, the web renderer's split, so lw_height is the
-exact surface lw_hit draws. Trees: cones (pine two tiers, broadleaf up + down, glow-fern low), tested in the 3 x 3 cells
-around each cell the ray crosses, only where the ray is low enough to touch them.
-materials: 0 sky (miss), 1 ground, 2 water, 3 pine, 4 broadleaf, 5 glow-fern.
+Surface: each terrain cell is two triangles split on its (0, 0)-(1, 1) diagonal, the web renderer's split, so lw_height
+is the exact surface lw_hit draws. Within NEAR_M the ray walks the tree grid (5 m), testing the parent terrain cell's
+triangles over each step and the cones of the 5 x 5 slots around it; beyond, it walks the terrain grid, ground only
+(the forest is canopy colour there). materials: 0 sky, 1 ground, 2 water, 3 spruce, 4 beech, 5 glow-fern.
 """
 from std.math import asin, atan2, cos, floor, pi, sin, sqrt
 from std.memory import bitcast
@@ -16,14 +17,47 @@ from std.memory import bitcast
 comptime F4 = SIMD[DType.float32, 4]
 comptime F8 = SIMD[DType.float32, 8]
 comptime BIG = Float32(3.4e38)
-comptime TS = Float32(1.6)  # tree height scale over the web's (a walker sees them from the ground)
-comptime TOP = Float32(2.2) * TS * Float32(1.5)  # tallest tree above its cell's ground, the skip bound
+comptime NEAR_M = Float32(150)  # trees are geometry within this range (SCALE.md section 2)
+comptime HMAX_M = Float32(40)  # tallest tree, the slot height scale and the ray's skip bound
 
 
 @always_inline
 def cell(T: Pointer[Float32, _], i: Int, j: Int, c: Int) -> Float32:
     var n = Int(T[0])
-    return T[4 + 5 * (((j % n) + n) % n * n + ((i % n) + n) % n) + c]
+    return T[4 + 4 * (((j % n) + n) % n * n + ((i % n) + n) % n) + c]
+
+
+@always_inline
+def slot(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
+    var n = Int(T[0])
+    var tn = Int(T[3])
+    return T[4 + 4 * n * n + ((j % tn) + tn) % tn * tn + ((i % tn) + tn) % tn]
+
+
+@always_inline
+def cone_part(kind: Int, part: Int) -> F4:
+    """Cone `part` of a tree of `kind` as (base, radius, height, exists) in fractions of the tree's height and crown
+    radius: web/world.mjs TREE_CONES. 0 spruce two tiers, 1 beech up and down cone over a bare trunk, 2 fern."""
+    if kind == 0:
+        return F4(0, 1, 0.6, 1) if part == 0 else F4(0.35, 0.7, 0.65, 1)
+    if kind == 1:
+        return F4(0.35, 1, 0.65, 1) if part == 0 else F4(0.35, 1, -0.3, 1)
+    return F4(0, 1, 1, 1) if part == 0 else F4(0, 0, 0, 0)
+
+
+@always_inline
+def tree_at(T: Pointer[Float32, _], ti: Int, tj: Int) -> F8:
+    """Slot (ti, tj): (centre x, y, ground z, height, crown radius, kind) in terrain cells; kind -1 when empty."""
+    var v = slot(T, ti, tj)
+    var kind = Int(byte(v, 0)) - 1
+    if kind < 0:
+        return F8(0, 0, 0, 0, 0, -1, 0, 0)
+    var tc = T[0] / T[3]
+    var x = (Float32(ti) + byte(v, 2) / 255) * tc
+    var y = (Float32(tj) + byte(v, 3) / 255) * tc
+    var hh = byte(v, 1) / 255 * HMAX_M / T[2]
+    var r = hh * (Float32(0.085) if kind == 0 else (Float32(0.25) if kind == 1 else Float32(0.6)))
+    return F8(x, y, lw_height(T, x, y), hh, r, Float32(kind), 0, 0)
 
 
 @always_inline
@@ -49,7 +83,8 @@ def lw_height(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
 
 @always_inline
 def cone(o: F4, d: F4, c: F4, r: Float32, h: Float32) -> F4:
-    """(t, normal) of the ray on the side of a cone, base circle (c, r) at c.z, apex c + (0, 0, h); h < 0 hangs down."""
+    """(t, normal) of the ray on a solid cone (side and base disc), base circle (c, r) at c.z, apex c + (0, 0, h); h < 0
+    hangs down."""
     var ax = o[0] - c[0]
     var ay = o[1] - c[1]
     var az = o[2] - c[2] - h
@@ -57,9 +92,16 @@ def cone(o: F4, d: F4, c: F4, r: Float32, h: Float32) -> F4:
     var A = d[0] * d[0] + d[1] * d[1] - k2 * d[2] * d[2]
     var B = 2 * (ax * d[0] + ay * d[1] - k2 * az * d[2])
     var C = ax * ax + ay * ay - k2 * az * az
+    var best = F4(BIG, 0, 0, 0)
+    if d[2] != 0:  # the base disc: on a slope the eye can sit below it
+        var tc = (c[2] - o[2]) / d[2]
+        var bx = ax + tc * d[0]
+        var by = ay + tc * d[1]
+        if tc > 1e-4 and bx * bx + by * by <= r * r:
+            best = F4(tc, 0, 0, Float32(-1) if h > 0 else Float32(1))
     var disc = B * B - 4 * A * C
     if disc < 0 or A == 0:
-        return F4(BIG, 0, 0, 0)
+        return best
     var s = sqrt(disc)
     for k in range(2):
         var t = (-B - s) / (2 * A) if k == 0 else (-B + s) / (2 * A)
@@ -71,35 +113,26 @@ def cone(o: F4, d: F4, c: F4, r: Float32, h: Float32) -> F4:
                 n = n / sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
                 if n[0] * d[0] + n[1] * d[1] + n[2] * d[2] > 0:
                     n = -n
-                return F4(t, n[0], n[1], n[2])
-    return F4(BIG, 0, 0, 0)
+                return F4(t, n[0], n[1], n[2]) if t < best[0] else best
+    return best
 
 
 @always_inline
-def tree(T: Pointer[Float32, _], i: Int, j: Int, o: F4, d: F4) -> F8:
-    """The tree of cell (i, j) along the ray: (t, normal, material, glow, hue)."""
-    var v = cell(T, i, j, 4)
-    var kind = Int(byte(v, 0)) - 1
+def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
+    """The tree of slot (ti, tj) along the ray: (t, normal, material, glow, hue)."""
+    var tr = tree_at(T, ti, tj)
+    var kind = Int(tr[5])
     if kind < 0:
         return F8(BIG, 0, 0, 0, 0, 0, 0, 0)
-    var s = byte(v, 1) / 100
-    var cx = Float32(i) + byte(v, 2) / 255
-    var cy = Float32(j) + byte(v, 3) / 255
-    var z = lw_height(T, cx, cy) - 0.1
     var best = F4(BIG, 0, 0, 0)
     for part in range(2):
-        var h: F4
-        if kind == 0:
-            h = cone(o, d, F4(cx, cy, z + Float32(part) * 0.75 * s * TS, 0), 0.5 * s * (1 - 0.35 * Float32(part)), 1.3 * s * TS)
-        elif kind == 1:
-            h = cone(o, d, F4(cx, cy, z + 0.7 * s * TS, 0), 0.75 * s, (Float32(1.0) if part == 0 else Float32(-0.7)) * s * TS)
-        else:
-            if part == 1:
-                break
-            h = cone(o, d, F4(cx, cy, z, 0), 0.5 * s, 0.6 * s * TS)
+        var c = cone_part(kind, part)
+        if c[3] == 0:
+            break
+        var h = cone(o, d, F4(tr[0], tr[1], tr[2] + c[0] * tr[3], 0), c[1] * tr[4], c[2] * tr[3])
         if h[0] < best[0]:
             best = h
-    var hue = Float32(((i * 73856093) ^ (j * 19349663)) & 1023) / 1023
+    var hue = Float32(((ti * 73856093) ^ (tj * 19349663)) & 1023) / 1023
     return F8(best[0], best[1], best[2], best[3], Float32(3 + kind), Float32(1) if kind == 2 else Float32(0), hue, 0)
 
 
@@ -137,11 +170,13 @@ def ground(T: Pointer[Float32, _], i: Int, j: Int, o: F4, d: F4, t0: Float32, t1
     return F8(best, -gx / l, -gy / l, 1 / l, Float32(2) if water else Float32(1), 0, 0, 0)
 
 
-def lw_hit(T: Pointer[Float32, _], o: F4, d: F4, far: Float32) -> F8:
-    """(t, normal, material, glow, hue) of the first surface along the ray (d unit) within far: a 2-D DDA over cells;
-    per cell, the ground's triangles and the trees of the 3 x 3 cells around it, skipped where the ray is above both."""
-    var cx = floor(o[0])
-    var cy = floor(o[1])
+def march(T: Pointer[Float32, _], o: F4, d: F4, t0: Float32, t1: Float32, cs: Float32, trees: Bool) -> F8:
+    """2-D DDA over cells of size cs (terrain cells) between ray parameters t0 and t1: each step tests the parent terrain
+    cell's triangles over the step and, with trees, the cones of the 5 x 5 tree slots; skipped where the ray is above
+    both. One body for the near (tree grid) and far (terrain grid) phases."""
+    var p = o + d * t0
+    var cx = floor(p[0] / cs)
+    var cy = floor(p[1] / cs)
     var sx = Float32(1) if d[0] > 0 else Float32(-1)
     var sy = Float32(1) if d[1] > 0 else Float32(-1)
     var mx = BIG
@@ -149,29 +184,36 @@ def lw_hit(T: Pointer[Float32, _], o: F4, d: F4, far: Float32) -> F8:
     var ex = BIG
     var ey = BIG
     if d[0] != 0:
-        mx = (cx + Float32(1 if d[0] > 0 else 0) - o[0]) / d[0]
-        ex = 1 / abs(d[0])
+        mx = t0 + ((cx + Float32(1 if d[0] > 0 else 0)) * cs - p[0]) / d[0]
+        ex = cs / abs(d[0])
     if d[1] != 0:
-        my = (cy + Float32(1 if d[1] > 0 else 0) - o[1]) / d[1]
-        ey = 1 / abs(d[1])
-    var enter = Float32(0)
+        my = t0 + ((cy + Float32(1 if d[1] > 0 else 0)) * cs - p[1]) / d[1]
+        ey = cs / abs(d[1])
+    var enter = t0
     var best = F8(BIG, 0, 0, 0, 0, 0, 0, 0)
-    for _ in range(512):
-        if enter >= far or enter >= best[0]:
+    var hmax = HMAX_M / T[2]
+    for _ in range(1024):
+        if enter >= t1 or enter >= best[0]:
             break
-        var leave = min(min(mx, my), far)
-        var i = Int(cx)
-        var j = Int(cy)
+        var leave = min(min(mx, my), t1)
+        var mid = o + d * (0.5 * (enter + leave))
+        var i = Int(floor(mid[0]))
+        var j = Int(floor(mid[1]))
         var zlo = min(o[2] + enter * d[2], o[2] + leave * d[2])
         var top = max(max(cell(T, i, j, 0), cell(T, i + 1, j, 0)), max(cell(T, i, j + 1, 0), cell(T, i + 1, j + 1, 0)))
-        if zlo <= top + TOP:  # low enough for a tree here; the ground only below its own top
-            if zlo <= top:
-                var g = ground(T, i, j, o, d, enter, leave)
-                if g[0] < best[0]:
-                    best = g
-            for dj in range(-1, 2):
-                for di in range(-1, 2):
-                    var h = tree(T, i + di, j + dj, o, d)
+        if zlo <= top:
+            var g = ground(T, i, j, o, d, enter, leave)
+            if g[0] < best[0]:
+                best = g
+        var ttop = top
+        if trees:  # the ground under any of the 5 x 5 slots: the terrain nodes their block spans
+            for nj in range(Int(floor((cy - 2) * cs)), Int(floor((cy + 3) * cs)) + 2):
+                for ni in range(Int(floor((cx - 2) * cs)), Int(floor((cx + 3) * cs)) + 2):
+                    ttop = max(ttop, cell(T, ni, nj, 0))
+        if trees and zlo <= ttop + hmax:  # 5 x 5 slots: a beech crown (up to 9 m radius) reaches two 5 m slots away
+            for dj in range(-2, 3):
+                for di in range(-2, 3):
+                    var h = tree(T, Int(cx) + di, Int(cy) + dj, o, d)
                     if h[0] < best[0]:
                         best = h
         if mx < my:
@@ -182,25 +224,32 @@ def lw_hit(T: Pointer[Float32, _], o: F4, d: F4, far: Float32) -> F8:
             enter = my
             my += ey
             cy += sy
-    return best if best[0] <= far else F8(BIG, 0, 0, 0, 0, 0, 0, 0)
+    return best
+
+
+def lw_hit(T: Pointer[Float32, _], o: F4, d: F4, far: Float32) -> F8:
+    """(t, normal, material, glow, hue) of the first surface along the ray (d unit) within far: trees and ground on the
+    5 m tree grid out to NEAR_M, then ground alone on the terrain grid."""
+    var near = min(NEAR_M / T[2], far)
+    var h = march(T, o, d, 0, near, T[0] / T[3], True)
+    if h[0] == BIG and far > near:
+        h = march(T, o, d, near, far, 1, False)
+    return h if h[0] <= far else F8(BIG, 0, 0, 0, 0, 0, 0, 0)
 
 
 def lw_tree_near(T: Pointer[Float32, _], x: Float32, y: Float32, pad: Float32) -> Bool:
-    """(x, y) within pad of a tree's widest circle (its base, or the broadleaf's skirt), in world units: a walker or a
-    camera target there would stand inside the foliage."""
-    var ci = Int(floor(x))
-    var cj = Int(floor(y))
-    for dj in range(-1, 2):
-        for di in range(-1, 2):
-            var v = cell(T, ci + di, cj + dj, 4)
-            var kind = Int(byte(v, 0)) - 1
-            if kind < 0:
+    """(x, y) within pad of a tree's trunk zone, in terrain cells (spruce and fern: the crown circle; beech: 0.3 of it,
+    its crown is high): a walker or a camera target there would stand inside the tree."""
+    var tn = T[3] / T[0]
+    var ci = Int(floor(x * tn))
+    var cj = Int(floor(y * tn))
+    for dj in range(-2, 3):
+        for di in range(-2, 3):
+            var tr = tree_at(T, ci + di, cj + dj)
+            if tr[5] < 0:
                 continue
-            var s = byte(v, 1) / 100
-            var r = (Float32(0.75) if kind == 1 else Float32(0.5)) * s + pad
-            var dx = x - Float32(ci + di) - byte(v, 2) / 255
-            var dy = y - Float32(cj + dj) - byte(v, 3) / 255
-            if dx * dx + dy * dy < r * r:
+            var r = tr[4] * (Float32(0.3) if tr[5] == 1 else Float32(1)) + pad
+            if (x - tr[0]) * (x - tr[0]) + (y - tr[1]) * (y - tr[1]) < r * r:
                 return True
     return False
 

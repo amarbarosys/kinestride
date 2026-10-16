@@ -40,8 +40,8 @@ if [ "$stage" = living ]; then  # Living World ground (living.mojo, CPU build): 
   WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/web/world.bin}
   C="mojo build -I kinestride kinestride/living_check.mojo -o $X/living/check && $X/living/check $WB"
   mkdir -p $X/living; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL living check"; fail=$((fail+1)); }
-  for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/0.5 \* s \* (1 - 0.35/0.8 * s * (1 - 0.35/' 's/if mx < my:/if mx > my:/'; do
-    ~/iTools/bin/mutant-check kinestride/living.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # wrap, diagonal, pine radius, DDA order
+  for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/(Float32(0.085) if kind == 0/(Float32(0.17) if kind == 0/' 's/if mx < my:/if mx > my:/' 's/% tn \* tn + ((i % tn)/% tn * n + ((i % tn)/'; do
+    ~/iTools/bin/mutant-check kinestride/living.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # wrap, diagonal, spruce crown, DDA order, tree-slot stride
   done
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all living checks"; exit 0

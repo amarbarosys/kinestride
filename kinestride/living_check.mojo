@@ -5,42 +5,26 @@ usage: living_check WORLD.bin    (prints PASS / FAIL lines, exit 1 on any FAIL)
 from std.math import cos, floor, sin, sqrt
 from std.sys import argv, exit
 
-from living import BIG, F4, TS, byte, cell, lw_height, lw_hit
+from living import BIG, F4, NEAR_M, cone_part, lw_height, lw_hit, tree_at
 
 
 def inside_tree(T: Pointer[Float32, _], p: F4) -> Bool:
-    """p inside a cone of the 3 x 3 cells around it, from each kind's radius profile."""
-    var ci = Int(floor(p[0]))
-    var cj = Int(floor(p[1]))
-    for dj in range(-1, 2):
-        for di in range(-1, 2):
-            var i = ci + di
-            var j = cj + dj
-            var v = cell(T, i, j, 4)
-            var kind = Int(byte(v, 0)) - 1
-            if kind < 0:
+    """p inside a cone of the 5 x 5 tree slots around it, from the cone's radius profile (not a ray test)."""
+    var tn = T[3] / T[0]
+    var ci = Int(floor(p[0] * tn))
+    var cj = Int(floor(p[1] * tn))
+    for dj in range(-2, 3):
+        for di in range(-2, 3):
+            var tr = tree_at(T, ci + di, cj + dj)
+            if tr[5] < 0:
                 continue
-            var s = byte(v, 1) / 100
-            var cx = Float32(i) + byte(v, 2) / 255
-            var cy = Float32(j) + byte(v, 3) / 255
-            var z = lw_height(T, cx, cy) - 0.1
-            var r = sqrt((p[0] - cx) * (p[0] - cx) + (p[1] - cy) * (p[1] - cy))
+            var r = sqrt((p[0] - tr[0]) * (p[0] - tr[0]) + (p[1] - tr[1]) * (p[1] - tr[1]))
             for part in range(2):
-                var zb = z
-                var r0 = 0.5 * s
-                var h = 0.6 * s * TS
-                if kind == 0:
-                    zb = z + Float32(part) * 0.75 * s * TS
-                    r0 = 0.5 * s * (1 - 0.35 * Float32(part))
-                    h = 1.3 * s * TS
-                elif kind == 1:
-                    zb = z + 0.7 * s * TS
-                    r0 = 0.75 * s
-                    h = (Float32(1.0) if part == 0 else Float32(-0.7)) * s * TS
-                elif part == 1:
-                    continue
-                var u = (p[2] - zb) / h  # 0 at the base, 1 at the apex
-                if u >= 0 and u <= 1 and r <= r0 * (1 - u):
+                var c = cone_part(Int(tr[5]), part)
+                if c[3] == 0:
+                    break
+                var u = (p[2] - tr[2] - c[0] * tr[3]) / (c[2] * tr[3])  # 0 at the base, 1 at the apex
+                if u >= 0 and u <= 1 and r <= c[1] * tr[4] * (1 - u):
                     return True
     return False
 
@@ -64,14 +48,14 @@ def main() raises:
     var worst = Float32(0)
     for j in range(n):
         for i in range(n):
-            worst = max(worst, abs(lw_height(T, Float32(i), Float32(j)) - T[4 + 5 * (j * n + i)]))
+            worst = max(worst, abs(lw_height(T, Float32(i), Float32(j)) - T[4 + 4 * (j * n + i)]))
             worst = max(worst, abs(lw_height(T, Float32(i + n) + 0.37, Float32(j) + 0.61) - lw_height(T, Float32(i) + 0.37, Float32(j - n) + 0.61)))
     var seam = abs(lw_height(T, Float32(n) - 1e-3, 5.5) - lw_height(T, 1e-3, 5.5))
     var ok1 = worst < 1e-4 and seam < 0.05
     print("PASS" if ok1 else "FAIL", "height: nodes and wrap max err", worst, "seam step", seam)
     bad += 0 if ok1 else 1
 
-    # 2. lw_hit against a brute march, rays from a walker's eye height (0.85 units = 1.7 m)
+    # 2. lw_hit against a brute march (trees within NEAR_M only, as lw_hit), rays from a walker's eye at 1.7 m, 2.5 km far
     var s = UInt64(12345)
     var agree = 0
     var trees = 0
@@ -82,21 +66,23 @@ def main() raises:
         var y = lcg(s, 12800) / 100
         var az = lcg(s, 6283) / 1000
         var el = -0.5 + lcg(s, 600) / 1000
-        var o = F4(x, y, max(lw_height(T, x, y), T[1]) + 0.85, 0)
+        var o = F4(x, y, max(lw_height(T, x, y), T[1]) + 1.7 / T[2], 0)
         var d = F4(cos(az) * cos(el), sin(az) * cos(el), sin(el), 0)
         if inside_tree(T, o):  # a walker never stands inside a trunk; such an eye sees the cone from inside
             skipped += 1
             continue
-        var h = lw_hit(T, o, d, 40)
+        var far = 2500 / T[2]
+        var near = NEAR_M / T[2]
+        var h = lw_hit(T, o, d, far)
         var tb = BIG
         var t = Float32(1e-3)
-        while t < 40:
+        while t < far:
             var p = o + d * t
-            if p[2] < lw_height(T, p[0], p[1]) or inside_tree(T, p):
+            if p[2] < lw_height(T, p[0], p[1]) or (t < near and inside_tree(T, p)):
                 tb = t
                 break
-            t += 1e-3
-        var same = (h[0] == BIG and tb == BIG) or (h[0] < BIG and tb < BIG and abs(h[0] - tb) < 2e-3)
+            t += Float32(1e-3) if t < near else Float32(1e-2)
+        var same = (h[0] == BIG and tb == BIG) or (h[0] < BIG and tb < BIG and abs(h[0] - tb) < 2e-3 * (Float32(1) if tb < near else Float32(10)))
         if h[0] < BIG and tb < BIG:
             maxerr = max(maxerr, abs(h[0] - tb))
         if h[4] >= 3:
@@ -108,6 +94,18 @@ def main() raises:
     var ok2 = agree == 256 - skipped and skipped < 32 and trees > 4
     print("PASS" if ok2 else "FAIL", "hit vs brute march:", agree, "/", 256 - skipped, "agree (", skipped, "eyes inside a tree skipped ), max |dt|", maxerr, "tree hits", trees)
     bad += 0 if ok2 else 1
+    # 3. tree slots: the occupied slots tree_at sees over the whole grid equal a raw scan of the slot block
+    var tn = Int(T[3])
+    var raw_n = 0
+    for k in range(tn * tn):
+        raw_n += 1 if T[4 + 4 * n * n + k] != 0 else 0
+    var seen = 0
+    for tj in range(tn):
+        for ti in range(tn):
+            seen += 1 if tree_at(T, ti, tj)[5] >= 0 else 0
+    var ok3 = seen == raw_n and raw_n > 1000
+    print("PASS" if ok3 else "FAIL", "tree slots: tree_at sees", seen, "of", raw_n, "occupied")
+    bad += 0 if ok3 else 1
     if bad:
         exit(1)
     print("PASS all living checks")

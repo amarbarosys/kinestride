@@ -68,7 +68,7 @@ comptime NEAR = Float32(1e-3)
 
 comptime LVIS = row_major[W * H]()
 comptime LPI = row_major[5 * NPART]()
-comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * (4 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]())]()
+comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * (4 + 4 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]())]()
 comptime RVI = 9  # int16 per vertex in rv.bin: position 3, unit normal x 32767 3, rgb 0..255 3 (callers load 2 * RVI * NRV bytes)
 comptime LRV = row_major[NRV * RVI]()  # all positions, then all normals, then all colours
 comptime LRT = row_major[NRT]()
@@ -80,9 +80,9 @@ comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the 
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
 comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's endless city, 1 unit = 1 m (cam[16:20]: seed, origin cell x y, far m)
 comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
-comptime LWF = (4 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]()) if LIVING else 0  # world floats
+comptime LWF = (4 + 4 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]()) if LIVING else 0  # world floats: header, terrain, tree slots
 comptime LWO = PFS * NPART  # where the world table starts in pf
-comptime LIVING_FAR = get_defined_int["LIVING_FAR", 60]()  # view distance, world units (1 unit = cam[16] m)
+comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in terrain cells (125 x 20 m = 2.5 km, SCALE.md)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
 comptime AA = get_defined_int["AA", 1]()  # 1: silhouette pixels average 4 analytic sub-rays
@@ -468,8 +468,8 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var base = V3(a[0], a[1], a[2], 0) * grain
         col = light(cam, base * base, n, view, sh, ao * a[3], 0)
     var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
-    var k = 0.022 * (0.6 + 0.9 * exp(-(u[2] - pf[LWO + 1]) / 3))
-    var fog = max(1 - exp(-max(d - 14, Float32(0)) * k), min(max((d - Float32(LIVING_FAR) * 0.7) / (Float32(LIVING_FAR) * 0.3), Float32(0)), Float32(1)))
+    var k = 0.006 * (0.6 + 0.9 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, thicker in valleys
+    var fog = max(1 - exp(-max(d - 2.5, Float32(0)) * k), min(max((d - Float32(LIVING_FAR) * 0.7) / (Float32(LIVING_FAR) * 0.3), Float32(0)), Float32(1)))
     var hor = V3(cam[23], cam[24], cam[25], 0)
     return (col * (1 - fog) + hor * hor * fog) * cam[26]
 
@@ -839,7 +839,7 @@ def main() raises:
     camh[7] = Float32(H) * 0.5 / tan(fovy * 0.5)
     camh[10] = Float32(atof(String(a[12])))
     comptime if LIVING:  # time of day s (default noon), metres per world unit (default 2)
-        sky_cam(camh, Float32(atof(String(a[13]))) if len(a) > 13 else Float32(75), Float32(atof(String(a[14]))) if len(a) > 14 else Float32(2))
+        sky_cam(camh, Float32(atof(String(a[13]))) if len(a) > 13 else Float32(75), Float32(atof(String(a[14]))) if len(a) > 14 else Float32(20))
     comptime if CITY:  # seed, origin cell x y, far m (default 1 0 0 1500)
         for k in range(4):
             camh[16 + k] = Float32(atof(String(a[13 + k]))) if len(a) > 16 else (Float32(1500) if k == 3 else Float32(1 if k == 0 else 0))
