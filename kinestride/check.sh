@@ -36,6 +36,16 @@ if [ "$stage" = city ]; then  # the endless city (city.mojo, CPU build): point m
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all city checks"; exit 0
 fi
+if [ "$stage" = living ]; then  # Living World ground (living.mojo, CPU build): nodes, torus wrap, lw_hit vs a brute march
+  WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/web/world.bin}
+  C="mojo build -I kinestride kinestride/living_check.mojo -o $X/living/check && $X/living/check $WB"
+  mkdir -p $X/living; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL living check"; fail=$((fail+1)); }
+  for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/0.5 \* s \* (1 - 0.35/0.8 * s * (1 - 0.35/' 's/if mx < my:/if mx > my:/'; do
+    ~/iTools/bin/mutant-check kinestride/living.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # wrap, diagonal, pine radius, DDA order
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all living checks"; exit 0
+fi
 if [ "$stage" = motion ]; then  # motion metrics (motion_metrics.mojo, CPU build) vs a float64 numpy twin + known answers
   C="mojo build -I kinestride kinestride/motion_metrics.mojo -o $X/motion/motion_metrics && .venv/bin/python -m kinestride.motion_check $X/motion/motion_metrics"
   mkdir -p $X/motion; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL motion check"; fail=$((fail+1)); }
