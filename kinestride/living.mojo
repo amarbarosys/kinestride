@@ -185,6 +185,26 @@ def lw_hit(T: Pointer[Float32, _], o: F4, d: F4, far: Float32) -> F8:
     return best if best[0] <= far else F8(BIG, 0, 0, 0, 0, 0, 0, 0)
 
 
+def lw_tree_near(T: Pointer[Float32, _], x: Float32, y: Float32, pad: Float32) -> Bool:
+    """(x, y) within pad of a tree's widest circle (its base, or the broadleaf's skirt), in world units: a walker or a
+    camera target there would stand inside the foliage."""
+    var ci = Int(floor(x))
+    var cj = Int(floor(y))
+    for dj in range(-1, 2):
+        for di in range(-1, 2):
+            var v = cell(T, ci + di, cj + dj, 4)
+            var kind = Int(byte(v, 0)) - 1
+            if kind < 0:
+                continue
+            var s = byte(v, 1) / 100
+            var r = (Float32(0.75) if kind == 1 else Float32(0.5)) * s + pad
+            var dx = x - Float32(ci + di) - byte(v, 2) / 255
+            var dy = y - Float32(cj + dj) - byte(v, 3) / 255
+            if dx * dx + dy * dy < r * r:
+                return True
+    return False
+
+
 @always_inline
 def lw_albedo(T: Pointer[Float32, _], x: Float32, y: Float32) -> F4:
     """Bilinear ground colour (display 0..1) and AO in the fourth lane."""
