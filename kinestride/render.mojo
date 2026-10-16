@@ -26,8 +26,9 @@ usage: render RENDER_DIR/ POSES.bin OUT FRAMES ex ey ez tx ty tz fovy_deg spacin
 """
 from std.atomic import Atomic, Ordering
 from std.ffi import external_call
-from std.math import cos, exp, floor, sin, sqrt, tan
+from std.math import cos, exp, floor, pow, sin, sqrt, tan
 from std.memory import bitcast
+from std.os import getenv
 from std.sys import argv, get_defined_int
 from std.time import perf_counter_ns
 from max.gpu import block_idx, block_dim, thread_idx
@@ -35,6 +36,7 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
 from city import city_hit
+from living import lw_albedo, lw_hit, lw_lit, sky_cam
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -66,7 +68,7 @@ comptime NEAR = Float32(1e-3)
 
 comptime LVIS = row_major[W * H]()
 comptime LPI = row_major[5 * NPART]()
-comptime LPF = row_major[PFS * NPART]()
+comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * (4 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]())]()
 comptime RVI = 9  # int16 per vertex in rv.bin: position 3, unit normal x 32767 3, rgb 0..255 3 (callers load 2 * RVI * NRV bytes)
 comptime LRV = row_major[NRV * RVI]()  # all positions, then all normals, then all colours
 comptime LRT = row_major[NRT]()
@@ -77,11 +79,15 @@ comptime LCAM = row_major[NCAM]()
 comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the terrain instead of the grey checker (gates keep the checker)
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
 comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's endless city, 1 unit = 1 m (cam[16:20]: seed, origin cell x y, far m)
+comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
+comptime LWF = (4 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]()) if LIVING else 0  # world floats
+comptime LWO = PFS * NPART  # where the world table starts in pf
+comptime LIVING_FAR = get_defined_int["LIVING_FAR", 60]()  # view distance, world units (1 unit = cam[16] m)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
 comptime AA = get_defined_int["AA", 1]()  # 1: silhouette pixels average 4 analytic sub-rays
 comptime GLASS = get_defined_int["GLASS", 1]()  # 1: see-through parts (alpha < 1: wings) in their own layer, blended over the scene
-comptime REFLECT = get_defined_int["REFLECT", 1]() if TERRAIN == 0 and CITY == 0 and get_defined_int["BOX_MM", 0]() == 0 else 0  # flat floor mirror
+comptime REFLECT = get_defined_int["REFLECT", 1]() if TERRAIN == 0 and CITY == 0 and LIVING == 0 and get_defined_int["BOX_MM", 0]() == 0 else 0  # flat floor mirror
 comptime REFL = Float32(0.2)  # floor reflectance (MuJoCo's grid material)
 comptime OGL = W * H if SHADOW == 2 else 0  # aux layers in sm, each W x H (raster is compiled for W x H): shadow map at 0,
 comptime OMR = OGL + (W * H if GLASS else 0)  # then the glass layer at OGL, the mirror layer at OMR
@@ -273,8 +279,10 @@ def ground(cam: TCAM, eye: V3, ray: V3) -> Float32:
 
 
 @always_inline
-def sun() -> V3:
-    """Unit direction to the sun, 57 degrees up."""
+def sun(cam: TCAM) -> V3:
+    """Unit direction to the light: the sun, 57 degrees up; LIVING: cam[17:20], the sun by day and the moon by night."""
+    comptime if LIVING:
+        return V3(cam[17], cam[18], cam[19], 0)
     return V3(0.4504, 0.3003, 0.8408, 0)
 
 
@@ -290,9 +298,9 @@ def sun_view(cam: TCAM) -> Tuple[V3, V3, V3, V3, Float32]:
     var t = V3(cam[3], cam[4], cam[5], 0)
     var e = V3(cam[0], cam[1], cam[2], 0)
     var r = max(sqrt(dot(e - t, e - t)), Float32(1e-3))
-    var fw = -sun()
+    var fw = -sun(cam)
     var right = unit(cross(fw, V3(0, 0, 1, 0)))
-    return (t + sun() * (50 * r), right, cross(right, fw), fw, Float32(H) * 0.5 * 50 / 1.5)
+    return (t + sun(cam) * (50 * r), right, cross(right, fw), fw, Float32(H) * 0.5 * 50 / 1.5)
 
 
 def suncam(cam: TCAM, scam: TCAM):
@@ -392,17 +400,82 @@ def street(sm: TVIS, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32, 8], ao:
         if dash and min(abs(u), abs(v)) < 0.12 and max(abs(u), abs(v)) > 12:
             base = V3(0.85, 0.75, 0.30, 0)
     var lit = Float32(1)
-    if city(cam, hit + n * 0.05, sun())[0] < 3.4e38:
+    if city(cam, hit + n * 0.05, sun(cam))[0] < 3.4e38:
         lit = 0
     comptime if SHADOW == 2:
-        lit = min(lit, shadow_map(sm, cam, hit, EMPTY, dot(n, sun())))
-    var col = light(base * base, n, unit(ray), lit, ao, spec)
+        lit = min(lit, shadow_map(sm, cam, hit, EMPTY, dot(n, sun(cam))))
+    var col = light(cam, base * base, n, unit(ray), lit, ao, spec)
     var fade = exp(-3 * h[0] * sqrt(dot(ray, ray)) / cam[19])
     return col * fade + V3(0.36, 0.4225, 0.5184, 0) * (1 - fade)
 
 
 @always_inline
-def ground_hit(cam: TCAM, eye: V3, ray: V3) -> Tuple[Float32, Int]:
+def living(cam: TCAM, pf: TPF, eye: V3, ray: V3) -> SIMD[DType.float32, 8]:
+    """living.mojo's first surface along ray (any length), in metres (cam[16] per world unit): t as this ray's parameter."""
+    var l = sqrt(dot(ray, ray))
+    var h = lw_hit(pf.ptr.unsafe_offset(LWO), eye / cam[16], ray / l, Float32(LIVING_FAR))
+    h[0] = h[0] * cam[16] / l if h[0] < 1e30 else Float32(3.4e38)
+    return h
+
+
+@always_inline
+def living_sky(cam: TCAM, view: V3) -> V3:
+    """The web's sky: horizon to zenith by elevation, sun disc and halo, stars at night (linear)."""
+    var f = min(max(view[2] / 0.8, Float32(0)), Float32(1))
+    var c = V3(cam[23], cam[24], cam[25], 0) * (1 - f) + V3(cam[20], cam[21], cam[22], 0) * f
+    c = c * c
+    if cam[30] < 0.5:
+        var r = (1 - dot(view, sun(cam))) / 1.6e-4  # ~1 deg disc
+        c += V3(1, 0.85, 0.6, 0) * (Float32(1.4) if r < 1 else 0.25 * exp(-(sqrt(r) - 1) * 0.7))
+    elif view[2] > 0:
+        var q = hash2(Int(floor(view[0] * 400)) * 7919 + Int(floor(view[1] * 400)), Int(floor(view[2] * 400)))
+        if q > 0.9985:
+            c += V3(0.8, 0.8, 0.9, 0) * cam[30]
+    return c
+
+
+@always_inline
+def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32, 8], ao: Float32) -> V3:
+    """Linear colour of a Living World surface: table albedo and AO on the ground, Fresnel water, cone foliage (glow-fern
+    lights at night); baked horizon shadow, the shadow map for the walker, exponential height fog to the horizon colour."""
+    var T = pf.ptr.unsafe_offset(LWO)
+    var hit = eye + ray * h[0]
+    var u = hit / cam[16]
+    var n = V3(h[1], h[2], h[3], 0)
+    var view = unit(ray)
+    var mat = Int(h[4])
+    var sh = lw_lit(T, u[0], u[1], cam[28], cam[29])
+    comptime if SHADOW == 2:
+        sh = min(sh, shadow_map(sm, cam, hit, EMPTY, dot(n, sun(cam))))
+    var col: V3
+    if mat == 2:  # water: two travelling swells tilt the normal; the sky by Fresnel, a sun glint
+        var t = cam[27]
+        n = unit(V3(0.05 * cos(t * 1.7 + u[0] * 2.1 + u[1] * 1.3), 0.05 * cos(t * 2.3 - u[0] * 0.9 + u[1] * 2.6), 1, 0))
+        var r = view - n * (2 * dot(view, n))
+        var fr = 0.02 + 0.98 * pow(1 - max(-dot(n, view), Float32(0)), Float32(5))
+        var a = lw_albedo(T, u[0], u[1])
+        col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
+        col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), Float32(200)) * 3 * (1 - cam[30]))
+    elif mat >= 3:  # pine, broadleaf, glow-fern (hue per tree)
+        var g = h[5] * cam[30]
+        var base = V3(0.06, 0.2, 0.08, 0) if mat == 3 else V3(0.16, 0.3, 0.08, 0)
+        if mat == 5:
+            base = V3(0.06, 0.2, 0.08, 0) * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g
+        col = light(cam, base * base, n, view, sh, ao, 0.1) + base * base * (1.6 * g)
+    else:
+        var a = lw_albedo(T, u[0], u[1])
+        var grain = 0.85 + 0.3 * vnoise(hit[0] * 1.3, hit[1] * 1.3)  # the web's detail, per pixel
+        var base = V3(a[0], a[1], a[2], 0) * grain
+        col = light(cam, base * base, n, view, sh, ao * a[3], 0)
+    var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
+    var k = 0.022 * (0.6 + 0.9 * exp(-(u[2] - pf[LWO + 1]) / 3))
+    var fog = max(1 - exp(-max(d - 14, Float32(0)) * k), min(max((d - Float32(LIVING_FAR) * 0.7) / (Float32(LIVING_FAR) * 0.3), Float32(0)), Float32(1)))
+    var hor = V3(cam[23], cam[24], cam[25], 0)
+    return (col * (1 - fog) + hor * hor * fog) * cam[26]
+
+
+@always_inline
+def ground_hit(cam: TCAM, pf: TPF, eye: V3, ray: V3) -> Tuple[Float32, Int]:
     """Ray parameter of the floor, terrain or box wall (3.4e38: none) and the box face (BOX: 0, 1 x walls, 2, 3 y, 4 floor, 5 ceiling)."""
     var tmin = Float32(3.4e38)
     var face = -1
@@ -418,6 +491,8 @@ def ground_hit(cam: TCAM, eye: V3, ray: V3) -> Tuple[Float32, Int]:
         tmin = ground(cam, eye, ray)
     elif CITY:
         tmin = city(cam, eye, ray)[0]
+    elif LIVING:
+        tmin = living(cam, pf, eye, ray)[0]
     else:
         if ray[2] < 0:
             tmin = -eye[2] / ray[2]
@@ -425,14 +500,14 @@ def ground_hit(cam: TCAM, eye: V3, ray: V3) -> Tuple[Float32, Int]:
 
 
 @always_inline
-def terrain_shadow(x0: V3, p: PW) -> Float32:
+def terrain_shadow(cam: TCAM, x0: V3, p: PW) -> Float32:
     """Soft terrain self-shadow: 16 steps up the sun ray, penumbra from the closest clearance over distance."""
     if (Int(p[4]) == 0 or p[2] == 0) and p[8] == 0:  # a plane never shades itself
         return 1
     var res = Float32(1)
     var t = Float32(0.05)
     for _ in range(16):
-        var x = x0 + sun() * t
+        var x = x0 + sun(cam) * t
         var d = x[2] - height_grad(x[0], x[1], p)[0]
         if d < 0:
             return 0
@@ -473,7 +548,7 @@ def blob(pose: TPOSE, cam: TCAM, x0: V3) -> Float32:
         var r = V3(pose[f], pose[F + f], pose[2 * F + f], 0)
         if spacing > 0:
             r = V3(Float32(f % GX) * spacing, Float32(f // GX) * spacing, r[2], 0)
-        var c = r - sun() * ((r[2] - x0[2]) / sun()[2])
+        var c = r - sun(cam) * ((r[2] - x0[2]) / sun(cam)[2])
         var d2 = ((x0[0] - c[0]) * (x0[0] - c[0]) + (x0[1] - c[1]) * (x0[1] - c[1])) / (BLOB * BLOB)
         if d2 < 9:
             s *= 1 - 0.6 * exp(-d2)
@@ -502,13 +577,18 @@ def occlusion(vis: TVIS, i: Int, z0: Float32, focal: Float32) -> Float32:
 
 
 @always_inline
-def light(albedo: V3, n: V3, view: V3, sh: Float32, ao: Float32, spec: Float32) -> V3:
+def light(cam: TCAM, albedo: V3, n: V3, view: V3, sh: Float32, ao: Float32, spec: Float32) -> V3:
     """Linear colour: sky/ground hemisphere ambient x ao, sun x shadow, Blinn highlight of strength spec."""
-    var ndl = max(dot(n, sun()), Float32(0))
+    var ndl = max(dot(n, sun(cam)), Float32(0))
     var amb = (V3(0.36, 0.40, 0.48, 0) * (0.5 + 0.5 * n[2]) + V3(0.20, 0.17, 0.13, 0) * (0.5 - 0.5 * n[2])) * ao
-    var col = albedo * (amb + V3(0.80, 0.76, 0.70, 0) * (ndl * sh))
+    var lc = V3(0.80, 0.76, 0.70, 0)
+    comptime if LIVING:  # the web's palette: ambient from the sky by elevation, warm sun by day, blue moon by night
+        var day = 1 - cam[30]
+        amb = (V3(cam[20], cam[21], cam[22], 0) * (0.5 + 0.5 * n[2]) + V3(0.20, 0.17, 0.13, 0) * (0.5 - 0.5 * n[2]) * day) * ((0.25 + 0.75 * day) * ao)
+        lc = V3(1, 0.95 - 0.25 * cam[31], 0.85 - 0.4 * cam[31], 0) * day + V3(0.05, 0.07, 0.16, 0) * cam[30]
+    var col = albedo * (amb + lc * (ndl * sh))
     if spec > 0 and ndl > 0:
-        var h = max(dot(n, unit(sun() - view)), Float32(0))
+        var h = max(dot(n, unit(sun(cam) - view)), Float32(0))
         var h2 = h * h
         var h8 = (h2 * h2) * (h2 * h2)
         var h16 = h8 * h8
@@ -550,14 +630,16 @@ def animal(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
     if not mirror:
         var x0 = eye + ray * tt
         comptime if SHADOW == 2:
-            sh = shadow_map(sm, cam, x0, key & 0xFFFFFFFF, dot(n, sun()))
+            sh = shadow_map(sm, cam, x0, key & 0xFFFFFFFF, dot(n, sun(cam)))
         comptime if TERRAIN:
-            sh = min(sh, terrain_shadow(x0, terrain(cam)))
+            sh = min(sh, terrain_shadow(cam, x0, terrain(cam)))
+        comptime if LIVING:
+            sh = min(sh, lw_lit(pf.ptr.unsafe_offset(LWO), x0[0] / cam[16], x0[1] / cam[16], cam[28], cam[29]))
     var rgb = V3(pf[PFS * p + 17], pf[PFS * p + 18], pf[PFS * p + 19], 0)
     if h[0] < 3.4e38:  # the vertex colours (texture baked per vertex), interpolated
         rgb = (vcolour(pi, rv, rt, p, base) * (1 - h[1] - h[2]) + vcolour(pi, rv, rt, p, base + 1) * h[1]
                + vcolour(pi, rv, rt, p, base + 2) * h[2])
-    return light(rgb * rgb, n * m, unit(ray) * m, sh, ao, 0.35)  # no fog on animals: at world-camera distances it greys them out
+    return light(cam, rgb * rgb, n * m, unit(ray) * m, sh, ao, 0.35)  # no fog on animals: at world-camera distances it greys them out
 
 
 @always_inline
@@ -565,12 +647,17 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
            key: UInt64, tt: Float32, ao: Float32, mk: UInt64) -> V3:
     """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
     else the ground or box (the flat floor mixes in the mirror layer's key mk at REFL), else the sky. Fog: ground only."""
+    comptime if LIVING:
+        var h = living(cam, pf, eye, ray)
+        if key != EMPTY and tt < h[0]:
+            return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False) * cam[26]
+        return meadow(sm, pf, cam, eye, ray, h, ao) if h[0] < 3.4e38 else living_sky(cam, unit(ray)) * cam[26]
     comptime if CITY:
         var h = city(cam, eye, ray)
         if key != EMPTY and tt < h[0]:
             return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False)
         return street(sm, cam, eye, ray, h, ao) if h[0] < 3.4e38 else sky(unit(ray))
-    var g = ground_hit(cam, eye, ray)
+    var g = ground_hit(cam, pf, eye, ray)
     var view = unit(ray)
     var fogc = V3(0.36, 0.4225, 0.5184, 0)  # horizon colour, linear
     if key != EMPTY and tt < g[0]:
@@ -594,12 +681,12 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
         var base = soil(hit[0], hit[1]) if SOIL else V3(0.55, 0.57, 0.6, 0) * (Float32(0.8) if check == 0 else Float32(1.0))
         var sh = Float32(1)
         comptime if SHADOW == 2:
-            sh = shadow_map(sm, cam, hit, EMPTY, dot(n, sun()))
+            sh = shadow_map(sm, cam, hit, EMPTY, dot(n, sun(cam)))
         comptime if SHADOW == 1:
             sh = blob(pose, cam, hit)
         comptime if TERRAIN:
-            sh = min(sh, terrain_shadow(hit, terrain(cam)))
-        var lit = light(base * base, n, view, sh, ao, 0)
+            sh = min(sh, terrain_shadow(cam, hit, terrain(cam)))
+        var lit = light(cam, base * base, n, view, sh, ao, 0)
         comptime if REFLECT:
             if mk != EMPTY:
                 lit = lit * (1 - REFL) + animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, mk, 0, 1, True) * REFL
@@ -617,7 +704,7 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
     var py = Float32(i // W) + 0.5 - Float32(H) * 0.5
     var ray = c[3] * c[4] + c[1] * px - c[2] * py
     var key = vis[i]
-    var g = ground_hit(cam, c[0], ray)
+    var g = ground_hit(cam, pf, c[0], ray)
     comptime if CITY_DEPTH:
         img[i] = bitcast[DType.uint32](g[0] * sqrt(dot(ray, ray)) if g[0] < 3.4e38 else Float32(1e30))
         return
@@ -751,6 +838,8 @@ def main() raises:
     camh[6] = fovy
     camh[7] = Float32(H) * 0.5 / tan(fovy * 0.5)
     camh[10] = Float32(atof(String(a[12])))
+    comptime if LIVING:  # time of day s (default noon), metres per world unit (default 2)
+        sky_cam(camh, Float32(atof(String(a[13]))) if len(a) > 13 else Float32(75), Float32(atof(String(a[14]))) if len(a) > 14 else Float32(2))
     comptime if CITY:  # seed, origin cell x y, far m (default 1 0 0 1500)
         for k in range(4):
             camh[16 + k] = Float32(atof(String(a[13 + k]))) if len(a) > 16 else (Float32(1500) if k == 3 else Float32(1 if k == 0 else 0))
@@ -760,12 +849,14 @@ def main() raises:
     var ctx = DeviceContext(0)  # every buffer below is created once; a frame allocates nothing
     var pi_h = load(rdir + "rmi.bin", 20 * NPART)
     var pf_h = load(rdir + "rmf.bin", 4 * PFS * NPART)
+    comptime if LIVING:  # the world table rides behind the parts (LWO); path from LIVING_BIN
+        pf_h += load(String(getenv("LIVING_BIN")), 4 * LWF)
     var rv_h = load(rdir + "rv.bin", 2 * RVI * NRV)
     var rt_h = load(rdir + "rt.bin", 2 * NRT)
     var rp_h = load(rdir + "rp.bin", NTRI)
     var pose_h = load(String(a[2]), 4 * PROWS * F)
     var pi_b = ctx.enqueue_create_buffer[DType.int32](5 * NPART)
-    var pf_b = ctx.enqueue_create_buffer[DType.float32](PFS * NPART)
+    var pf_b = ctx.enqueue_create_buffer[DType.float32](PFS * NPART + LWF)
     var rv_b = ctx.enqueue_create_buffer[DType.int16](RVI * NRV)
     var rt_b = ctx.enqueue_create_buffer[DType.uint16](NRT)
     var rp_b = ctx.enqueue_create_buffer[DType.uint8](NTRI)

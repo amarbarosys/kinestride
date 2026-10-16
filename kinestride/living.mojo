@@ -10,7 +10,7 @@ exact surface lw_hit draws. Trees: cones (pine two tiers, broadleaf up + down, g
 around each cell the ray crosses, only where the ray is low enough to touch them.
 materials: 0 sky (miss), 1 ground, 2 water, 3 pine, 4 broadleaf, 5 glow-fern.
 """
-from std.math import floor, sqrt
+from std.math import asin, atan2, cos, floor, pi, sin, sqrt
 from std.memory import bitcast
 
 comptime F4 = SIMD[DType.float32, 4]
@@ -218,3 +218,28 @@ def lw_lit(T: Pointer[Float32, _], x: Float32, y: Float32, sun_el: Float32, az8:
         var b1 = byte(cell(T, ci, cj, 2 + (a1 >> 2)), a1 & 3)
         hz += (b0 * (1 - fa) + b1 * fa) * (fx if k & 1 else 1 - fx) * (fy if k >> 1 else 1 - fy)
     return min(max((sun_el - hz / 255 * 1.5707963) / 0.08 + 0.5, Float32(0)), Float32(1))
+
+
+def sky_cam(mut c: List[Float32], t: Float32, m: Float32):
+    """cam[16:32] for render.mojo LIVING=1 at time t (s; one day = 150 s, the web's sky(t)): metres per unit, light dir
+    (sun, or the moon below the horizon), zenith and horizon colours, exposure, t, light elevation, azimuth in eighths,
+    night, dusk."""
+    var a = t / 150 * 2 * pi - pi / 2
+    var sx = cos(a) * 0.6
+    var sy = cos(a) * 0.4
+    var sz = sin(a)
+    var l = sqrt(sx * sx + sy * sy + sz * sz)
+    sx /= l; sy /= l; sz /= l
+    var day = min(max(sz * 4 + 0.35, Float32(0)), Float32(1))
+    var dusk = min(max(1 - abs(sz) * 5, Float32(0)), Float32(1)) * min(day * 3, Float32(1))
+    var g = Float32(1) if sz > -0.05 else Float32(-1)
+    c[16] = m
+    c[17] = g * sx; c[18] = g * sy; c[19] = g * sz
+    c[20] = 0.01 + 0.17 * day; c[21] = 0.015 + 0.385 * day; c[22] = 0.05 + 0.8 * day
+    c[23] = 0.04 + 0.68 * day + 0.5 * dusk; c[24] = 0.06 + 0.76 * day + 0.15 * dusk; c[25] = 0.12 + 0.83 * day - 0.2 * dusk
+    c[26] = 1 + 0.6 * dusk + 0.6 * (1 - day)
+    c[27] = t
+    c[28] = asin(min(max(g * sz, Float32(-1)), Float32(1)))
+    c[29] = (atan2(g * sy, g * sx) / (2 * pi) * 8 + 8) % 8
+    c[30] = 1 - day
+    c[31] = dusk
