@@ -38,10 +38,11 @@ if [ "$stage" = city ]; then  # the endless city (city.mojo, CPU build): point m
 fi
 if [ "$stage" = living ]; then  # Living World ground (living.mojo, CPU build): nodes, torus wrap, lw_hit vs a brute march
   WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/web/world.bin}
-  C="mojo build -I kinestride kinestride/living_check.mojo -o $X/living/check && $X/living/check $WB"
+  WEB=$(cd "$(dirname "$WB")/.." && node -e "import('./web/world.mjs').then(m => console.log(m.TREE_CONES.flatMap(c => [...c, [0, 0, 0]].slice(0, 2).flat()).join(',')))")
+  C="mojo build -I kinestride kinestride/living_check.mojo -o $X/living/check && $X/living/check $WB $WEB"
   mkdir -p $X/living; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL living check"; fail=$((fail+1)); }
-  for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/(Float32(0.085) if kind == 0/(Float32(0.17) if kind == 0/' 's/if mx < my:/if mx > my:/' 's/% tn \* tn + ((i % tn)/% tn * n + ((i % tn)/'; do
-    ~/iTools/bin/mutant-check kinestride/living.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # wrap, diagonal, spruce crown, DDA order, tree-slot stride
+  for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/CROWN = SIMD\[DType.float32, 8\](0.085,/CROWN = SIMD[DType.float32, 8](0.17,/' 's/F4(0.65, 1, 0.2, 1) if part == 0/F4(0.3, 1, 0.2, 1) if part == 0/' 's/if mx < my:/if mx > my:/' 's/% tn \* tn + ((i % tn)/% tn * n + ((i % tn)/'; do
+    ~/iTools/bin/mutant-check kinestride/living.mojo "$m" -- env PATH=$PWD/.venv/bin:$PATH bash -c "$C" || fail=$((fail+1))  # wrap, diagonal, spruce crown, pine crown base, DDA order, tree-slot stride
   done
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all living checks"; exit 0

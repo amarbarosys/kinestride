@@ -36,7 +36,7 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
 from city import city_hit
-from living import lw_albedo, lw_hit, lw_lit, sky_cam
+from living import cell, lw_albedo, lw_hit, lw_lit, sky_cam
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -68,7 +68,7 @@ comptime NEAR = Float32(1e-3)
 
 comptime LVIS = row_major[W * H]()
 comptime LPI = row_major[5 * NPART]()
-comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * (4 + 4 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]())]()
+comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * (4 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]())]()
 comptime RVI = 9  # int16 per vertex in rv.bin: position 3, unit normal x 32767 3, rgb 0..255 3 (callers load 2 * RVI * NRV bytes)
 comptime LRV = row_major[NRV * RVI]()  # all positions, then all normals, then all colours
 comptime LRT = row_major[NRT]()
@@ -80,7 +80,7 @@ comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the 
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
 comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's endless city, 1 unit = 1 m (cam[16:20]: seed, origin cell x y, far m)
 comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
-comptime LWF = (4 + 4 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]()) if LIVING else 0  # world floats: header, terrain, tree slots
+comptime LWF = (4 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]()) if LIVING else 0  # world floats: header, terrain, tree slots
 comptime LWO = PFS * NPART  # where the world table starts in pf
 comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in terrain cells (125 x 20 m = 2.5 km, SCALE.md)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
@@ -456,15 +456,21 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var a = lw_albedo(T, u[0], u[1])
         col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
         col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), Float32(200)) * 3 * (1 - cam[30]))
-    elif mat >= 3:  # pine, broadleaf, glow-fern (hue per tree)
+    elif mat >= 3:  # a tree: leaf colour by species (web/world.mjs SPECIES), glow-fern lit at night (hue per tree)
         var g = h[5] * cam[30]
-        var base = V3(0.06, 0.2, 0.08, 0) if mat == 3 else V3(0.16, 0.3, 0.08, 0)
-        if mat == 5:
-            base = V3(0.06, 0.2, 0.08, 0) * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g
+        var sp = mat - 3
+        var leaf = V3(0.05, 0.17, 0.09, 0) if sp == 0 else (V3(0.16, 0.3, 0.08, 0) if sp == 1 else (V3(0.06, 0.2, 0.08, 0) if sp == 2 else (V3(0.3, 0.42, 0.12, 0) if sp == 3 else (V3(0.2, 0.28, 0.1, 0) if sp == 4 else V3(0.17, 0.24, 0.16, 0)))))
+        var base = leaf * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g
         col = light(cam, base * base, n, view, sh, ao, 0.1) + base * base * (1.6 * g)
     else:
         var a = lw_albedo(T, u[0], u[1])
-        var grain = 0.85 + 0.3 * vnoise(hit[0] * 1.3, hit[1] * 1.3)  # the web's detail, per pixel
+        # ground per habitat: noise scale (1/m) and contrast. 0 scree stones, 1 riparian, 2 meadow grass streaks,
+        # 3 spruce moss, 4 heather clumps, 5 beech leaf litter
+        var hb = Int(cell(T, Int(floor(u[0] + 0.5)), Int(floor(u[1] + 0.5)), 4))
+        var fq = Float32(1.25) if hb == 0 else (Float32(2) if hb == 1 else (Float32(3.3) if hb == 2 else (Float32(1.5) if hb == 3 else (Float32(2) if hb == 4 else Float32(1)))))
+        var amp = Float32(0.7) if hb == 0 else (Float32(0.3) if hb == 1 else (Float32(0.35) if hb == 2 else (Float32(0.15) if hb == 3 else (Float32(0.5) if hb == 4 else Float32(0.4)))))
+        var nx = hit[0] * fq * (Float32(0.35) if hb == 2 else Float32(1))  # grass: streaks along y
+        var grain = 1 - amp * 0.5 + amp * vnoise(nx, hit[1] * fq)
         var far = min(max((h[0] * sqrt(dot(ray, ray)) - 100) / 100, Float32(0)), Float32(1))  # past 100-200 m
         var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1))  # dark green: a stand's crowns
         grain = grain * (1 - canopy) + canopy * (0.55 + 0.9 * vnoise(hit[0] * 0.17, hit[1] * 0.17) * vnoise(hit[0] * 0.5 + 7, hit[1] * 0.5))  # 6 m crowns, gaps

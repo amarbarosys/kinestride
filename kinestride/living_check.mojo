@@ -48,7 +48,7 @@ def main() raises:
     var worst = Float32(0)
     for j in range(n):
         for i in range(n):
-            worst = max(worst, abs(lw_height(T, Float32(i), Float32(j)) - T[4 + 4 * (j * n + i)]))
+            worst = max(worst, abs(lw_height(T, Float32(i), Float32(j)) - T[4 + 5 * (j * n + i)]))
             worst = max(worst, abs(lw_height(T, Float32(i + n) + 0.37, Float32(j) + 0.61) - lw_height(T, Float32(i) + 0.37, Float32(j - n) + 0.61)))
     var seam = abs(lw_height(T, Float32(n) - 1e-3, 5.5) - lw_height(T, 1e-3, 5.5))
     var ok1 = worst < 1e-4 and seam < 0.05
@@ -94,11 +94,64 @@ def main() raises:
     var ok2 = agree == 256 - skipped and skipped < 32 and trees > 4
     print("PASS" if ok2 else "FAIL", "hit vs brute march:", agree, "/", 256 - skipped, "agree (", skipped, "eyes inside a tree skipped ), max |dt|", maxerr, "tree hits", trees)
     bad += 0 if ok2 else 1
+    # 2b. aimed rays: 6 trees of every species seen from 40 m at crown height (random rays rarely meet a ridge pine)
+    var tn2 = Int(T[3])
+    var aimed = 0
+    var aimed_ok = 0
+    for sp in range(6):
+        var found = 0
+        var k = sp * 7919
+        while found < 6 and k < tn2 * tn2 + sp * 7919:
+            var tr = tree_at(T, k % tn2, (k // tn2) % tn2)
+            k += 97
+            if Int(tr[5]) != sp:
+                continue
+            found += 1
+            var c = cone_part(sp, 0)
+            var target = F4(tr[0], tr[1], tr[2] + (c[0] + 0.3 * c[2]) * tr[3], 0)
+            var o = target + F4(40 / T[2], 0, 0, 0)
+            o[2] = max(lw_height(T, o[0], o[1]), T[1]) + max(Float32(1.7) / T[2], target[2] - lw_height(T, o[0], o[1]))
+            if inside_tree(T, o):
+                continue
+            var d = target - o
+            d = d / sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+            var h = lw_hit(T, o, d, NEAR_M / T[2])
+            var tb = BIG
+            var t = Float32(1e-3)
+            while t < NEAR_M / T[2]:
+                var q = o + d * t
+                if q[2] < lw_height(T, q[0], q[1]) or inside_tree(T, q):
+                    tb = t
+                    break
+                t += Float32(1e-3)
+            aimed += 1
+            if (h[0] == BIG and tb == BIG) or (h[0] < BIG and tb < BIG and abs(h[0] - tb) < 2e-3):
+                aimed_ok += 1
+            else:
+                print("  aimed species", sp, "hit", h[0], "brute", tb)
+    var ok2b = aimed_ok == aimed and aimed >= 24
+    print("PASS" if ok2b else "FAIL", "aimed rays (6 per species):", aimed_ok, "/", aimed, "agree")
+    bad += 0 if ok2b else 1
+
+    # 4. shapes: cone_part is shared by lw_hit and the inside test above, so check it against the web's TREE_CONES
+    # (the other front end of the same world), passed in as 36 numbers: species x 2 cones x (base, radius, height)
+    if len(argv()) > 2:
+        var web = String(argv()[2]).split(",")
+        var off = 0
+        for sp in range(6):
+            for part in range(2):
+                var c = cone_part(sp, part)
+                for q in range(3):
+                    off = max(off, Int(abs(Float64(c[q] if c[3] > 0 else 0) - atof(web[6 * sp + 3 * part + q])) * 1000))
+        var ok4 = off == 0
+        print("PASS" if ok4 else "FAIL", "cone shapes equal web/world.mjs TREE_CONES (max diff x1000:", off, ")")
+        bad += 0 if ok4 else 1
+
     # 3. tree slots: the occupied slots tree_at sees over the whole grid equal a raw scan of the slot block
     var tn = Int(T[3])
     var raw_n = 0
     for k in range(tn * tn):
-        raw_n += 1 if T[4 + 4 * n * n + k] != 0 else 0
+        raw_n += 1 if T[4 + 5 * n * n + k] != 0 else 0
     var seen = 0
     for tj in range(tn):
         for ti in range(tn):
