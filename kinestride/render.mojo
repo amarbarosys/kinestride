@@ -473,9 +473,20 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var sp = mat - 3
         var leaf = V3(0.08, 0.24, 0.12, 0) if sp == 0 else (V3(0.16, 0.3, 0.08, 0) if sp == 1 else (V3(0.06, 0.2, 0.08, 0) if sp == 2 else (V3(0.3, 0.42, 0.12, 0) if sp == 3 else (V3(0.2, 0.28, 0.1, 0) if sp == 4 else V3(0.17, 0.24, 0.16, 0)))))
         var base = leaf * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g
+        var leaf_n = n
         if mat == 9:  # bark: birch white-grey, the rest brown, a little variation per tree
             base = (V3(0.72, 0.7, 0.64, 0) if Int(h[7]) == 3 else V3(0.3, 0.21, 0.14, 0)) * (0.85 + 0.3 * h[6])
-        col = light(cam, base * base, n, view, sh, ao, 0.1) + base * base * (1.6 * g)
+        else:
+            var q = vnoise(hit[0] * 2, hit[1] * 2)
+            var qx = vnoise(hit[0] * 2 + 0.13, hit[1] * 2) - vnoise(hit[0] * 2 - 0.13, hit[1] * 2)
+            var qy = vnoise(hit[0] * 2, hit[1] * 2 + 0.13) - vnoise(hit[0] * 2, hit[1] * 2 - 0.13)
+            base *= 0.82 + 0.36 * q
+            leaf_n = unit(n + V3(qx, qy, 0, 0) * 0.2)
+        col = light(cam, base * base, leaf_n, view, sh, ao, 0.1) + base * base * (1.6 * g)
+        if mat != 9:  # backlight through leaf edges and crowns
+            var rim = pow(1 - abs(dot(leaf_n, view)), Float32(2))
+            var back = max(dot(-leaf_n, sun(cam)), Float32(0))
+            col += base * base * ((0.2 * back + 0.08 * rim) * (1 - cam[30]))
     else:
         var a = lw_albedo(T, u[0], u[1])
         # ground per habitat: noise scale (1/m) and contrast. 0 scree stones, 1 riparian, 2 meadow grass streaks,
