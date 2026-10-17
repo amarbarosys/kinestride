@@ -23,10 +23,9 @@ def activation(a, u, dt, p=Params()):
     return u + (a - u) * exp(-dt / tau)
 
 
-def fatigue(f, output, dt, p=Params(), resting=None):
-    resting = output == 0 if resting is None else resting
-    target = 0.0 if resting else min(1.0, max(0.0, output))
-    tau = p.tau_recovery if resting else p.tau_fatigue
+def fatigue(f, output, dt, p=Params()):
+    target = min(1.0, max(0.0, output))
+    tau = p.tau_fatigue if target > f else p.tau_recovery
     return target + (f - target) * exp(-dt / tau)
 
 
@@ -53,6 +52,15 @@ def check():
     assert abs(activation(1, 0, p.tau_fall) - exp(-1)) < 1e-12
     assert abs(fatigue(0, 1, p.tau_fatigue) - (1 - exp(-1))) < 1e-12
     assert abs(fatigue(1, 0, p.tau_recovery) - exp(-1)) < 1e-12
+    recovery_output = (1.0 / 7.5) * (1.0 - 0.8) * velocity_factor(-0.5, p)
+    assert abs(recovery_output - 0.01) < 1e-12
+    a0, f0 = 1.0 / 7.5, 0.8
+    assert activation(a0, 0.0, 0.01, p) != activation(a0, 0.01, 0.01, p)
+    for u in (0.0, 0.01):
+        got = fatigue(f0, recovery_output, 0.01, p)
+        want = recovery_output + (f0 - recovery_output) * exp(-0.01 / p.tau_recovery)
+        wrong = recovery_output + (f0 - recovery_output) * exp(-0.01 / p.tau_fatigue)
+        assert abs(got - want) < 1e-12 and abs(got - wrong) > 1e-5, (u, got, want, wrong)
     assert abs(force(1, 0, p.lopt, 0, p) - p.fmax) < 1e-12
     expected = (0.0, 0.375, 1.0, 7.0 / 6.0)
     observed = tuple(velocity_factor(x, p) for x in (-1.0, -0.5, 0.0, 0.5))

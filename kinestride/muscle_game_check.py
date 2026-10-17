@@ -49,7 +49,7 @@ def check(binary, work):
         flfv = velocity_factor(-0.5, p)
         a1 = activation(a, u, dt, p)
         output = a * (1.0 - f) * flfv
-        f1 = fatigue(f, output, dt, p, resting=(u == 0.0))
+        f1 = fatigue(f, output, dt, p)
         active_force = force(a1, f, 0.0, -0.5, p)
         work = abs(active_force * -0.5) * dt
         energy = min(1.0, max(0.0, energy - work * GAME_RULES[1]))

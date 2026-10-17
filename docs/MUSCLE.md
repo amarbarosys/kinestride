@@ -10,7 +10,7 @@ For constant excitation `u` during `dt`, activation is
 
 Use `tau_rise` when `u > a`, otherwise `tau_fall`. This closed form has no explicit-Euler stability limit.
 
-Fatigue `f` is in `[0,1]`. Let `p` be normalized active output at the start of the step. During excitation, `f_inf = p` and `tau = tau_fatigue`; when excitation is zero, `f_inf = 0` and `tau = tau_recovery`, including the activation tail as it falls:
+Fatigue `f` is in `[0,1]`. Let `p` be normalized active output at the start of the step, clamped to `[0,1]`. Use `tau_fatigue` when `p > f`; otherwise use `tau_recovery`. Selection depends on the target relative to current fatigue, not an exact-zero excitation check, so low nonzero excitation recovers continuously when its target is below current fatigue:
 
 `f' = f_inf + (f - f_inf) exp(-dt / tau)`
 

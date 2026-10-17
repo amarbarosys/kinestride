@@ -32,7 +32,7 @@ if [ "$stage" = muscle ]; then
   $M kinestride/muscle_trace_check.py "$T/trace" "$T/trace-run"
   ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/activation1 \* (1.0 - fatigue0)/activation0 * (1.0 - fatigue0)/' -- \
     bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/muscle/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/smooth.mojo -o .work/muscle/mutant > .work/muscle/mutant-build.log 2>&1; .venv/bin/python kinestride/muscle_engine_check.py .work/muscle/mutant .work/muscle/mutant-run'
-  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/tau = mf\[p + 10\] if rest else mf\[p + 9\]/tau = mf[p + 9]/' -- \
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/tau = mf\[p + 9\] if fatigue_target > fatigue0 else mf\[p + 10\]/tau = mf[p + 9]/' -- \
     bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/muscle/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=0 -I kinestride kinestride/muscle_demo.mojo -o .work/muscle/fatigue-mutant > .work/muscle/fatigue-mutant-build.log 2>&1; .venv/bin/python kinestride/muscle_trace_check.py .work/muscle/fatigue-mutant .work/muscle/fatigue-mutant-run'
   ~/iTools/bin/mojo-cached build $(cat "$T/spider/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/muscle_demo.mojo -o "$T/muscle-demo" > "$T/demo-build.log" 2>&1 \
     || { echo "FAIL muscle demo GPU build: $T/demo-build.log"; exit 1; }

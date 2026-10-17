@@ -14,6 +14,7 @@ def main() raises:
     var mode = String(args[3])
     var trace_mode = mode == "trace"
     var game_mode = mode == "game"
+    var recovery_mode = mode == "recovery0" or mode == "recovery001"
     var ctx = DeviceContext(0)
     var mi_b = ctx.enqueue_create_buffer[DType.int32](eng.NI)
     var mf_b = ctx.enqueue_create_buffer[DType.float32](eng.NFL)
@@ -39,8 +40,14 @@ def main() raises:
     var samples = 0
     var peak_fatigue: Float32 = 0
     var dt = mf.unsafe_ptr().unsafe_bitcast[Float32]()[eng.TSTEP]
+    if recovery_mode:
+        output[eng.OMUS * eng.F] = 1.0 / 7.5
+        output[(eng.OMUS + 1) * eng.F] = 0.8
+        ctx.enqueue_copy(o_b, output.unsafe_ptr())
     for i in range(steps):
-        if trace_mode or game_mode:
+        if recovery_mode:
+            controls[0] = 0.0 if mode == "recovery0" else 0.01
+        elif trace_mode or game_mode:
             if i < 40:
                 controls[0] = Float32(i + 1) / 40.0
             elif i < 120:
@@ -53,10 +60,10 @@ def main() raises:
         ctx.enqueue_function(kernel, TileTensor(mi_b, eng.LI), TileTensor(mf_b, eng.LF), TileTensor(q_b, eng.LQ), TileTensor(v_b, eng.LV), TileTensor(u_b, eng.LU), TileTensor(o_b, eng.LO), grid_dim=eng.GRID, block_dim=eng.BLOCK)
         var step = i + 1
         var checkpoint = step == 1 or step == 40 or step == 120 or step == 160 or step == 200 or step == 240
-        if ((trace_mode or game_mode) and checkpoint) or (not trace_mode and not game_mode and (i % 100 == 99 or i == steps - 1)):
+        if ((trace_mode or game_mode) and checkpoint) or (recovery_mode and i == 0) or (not trace_mode and not game_mode and not recovery_mode and (i % 100 == 99 or i == steps - 1)):
             ctx.enqueue_copy(output.unsafe_ptr(), o_b)
             ctx.synchronize()
-            if trace_mode or game_mode:
+            if trace_mode or game_mode or recovery_mode:
                 var stride = 10 if game_mode else 6
                 var row = samples * stride
                 trace[row] = Float32(step)
@@ -73,13 +80,16 @@ def main() raises:
                 samples += 1
             else:
                 peak_fatigue = max(peak_fatigue, output[(eng.OMUS + 1) * eng.F])
-    if trace_mode or game_mode:
-        if samples != 6:
-            raise Error("FAIL muscle trace: expected six oracle checkpoints")
-        var count = 36 if trace_mode else 60
+    if trace_mode or game_mode or recovery_mode:
+        var expected_samples = 1 if recovery_mode else 6
+        if samples != expected_samples:
+            raise Error("FAIL muscle trace: unexpected oracle checkpoint count")
+        var count = 6 if recovery_mode else (36 if trace_mode else 60)
         with open(dir + "trace.bin", "w") as file:
             file.write_bytes(Span(unsafe_ptr=trace.unsafe_ptr().unsafe_bitcast[UInt8](), length=count * 4))
-        if game_mode:
+        if recovery_mode:
+            print("PASS muscle recovery runner:", mode)
+        elif game_mode:
             print("PASS muscle game runner:", steps, "steps,", samples, "checkpoints")
         else:
             print("PASS muscle trace runner:", steps, "steps,", samples, "checkpoints")
