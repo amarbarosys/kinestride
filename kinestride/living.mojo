@@ -12,28 +12,30 @@ triangles over each step and the cones of the 5 x 5 slots around it; beyond, it 
 (the forest is canopy colour there). materials: 0 sky, 1 ground, 2 water, 3 + species (spruce, beech, fern, birch,
 alder, pine).
 """
+from std.sys import get_defined_int
 from std.math import asin, atan2, cos, floor, pi, sin, sqrt
 from std.memory import bitcast
 
 comptime F4 = SIMD[DType.float32, 4]
 comptime F8 = SIMD[DType.float32, 8]
 comptime BIG = Float32(3.4e38)
-comptime NEAR_M = Float32(150)  # trees are geometry within this range (SCALE.md section 2)
+comptime NEAR_M = Float32(get_defined_int["LIVING_NEAR", 150]())  # trees are geometry within this range (SCALE.md section 2)
 comptime HMAX_M = Float32(40)  # tallest tree, the slot height scale and the ray's skip bound
+comptime HDR = 8  # world.bin header floats: N, sea, C, TN, max terrain height, 3 spare
 comptime CROWN = SIMD[DType.float32, 8](0.085, 0.25, 0.6, 0.13, 0.2, 0.22, 0, 0)
 
 
 @always_inline
 def cell(T: Pointer[Float32, _], i: Int, j: Int, c: Int) -> Float32:
     var n = Int(T[0])
-    return T[4 + 5 * (((j % n) + n) % n * n + ((i % n) + n) % n) + c]
+    return T[HDR + 5 * (((j % n) + n) % n * n + ((i % n) + n) % n) + c]
 
 
 @always_inline
 def slot(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
     var n = Int(T[0])
     var tn = Int(T[3])
-    return T[4 + 5 * n * n + ((j % tn) + tn) % tn * tn + ((i % tn) + tn) % tn]
+    return T[HDR + 5 * n * n + ((j % tn) + tn) % tn * tn + ((i % tn) + tn) % tn]
 
 
 @always_inline
@@ -200,9 +202,11 @@ def march(T: Pointer[Float32, _], o: F4, d: F4, t0: Float32, t1: Float32, cs: Fl
     var enter = t0
     var best = F8(BIG, 0, 0, 0, 0, 0, 0, 0)
     var hmax = HMAX_M / T[2]
+    var full = True
+    var stepx = True
     for _ in range(1024):
-        if enter >= t1 or enter >= best[0]:
-            break
+        if enter >= t1 or enter >= best[0] or (d[2] >= 0 and o[2] + enter * d[2] > T[4] + hmax):
+            break  # done, hit, or rising above the highest ground and tree
         var leave = min(min(mx, my), t1)
         var mid = o + d * (0.5 * (enter + leave))
         var i = Int(floor(mid[0]))
@@ -219,12 +223,17 @@ def march(T: Pointer[Float32, _], o: F4, d: F4, t0: Float32, t1: Float32, cs: Fl
                 for ni in range(Int(floor((cx - 2) * cs)), Int(floor((cx + 3) * cs)) + 2):
                     ttop = max(ttop, cell(T, ni, nj, 0))
         if trees and zlo <= ttop + hmax:  # 5 x 5 slots: a beech crown (up to 9 m radius) reaches two 5 m slots away
-            for dj in range(-2, 3):
-                for di in range(-2, 3):
-                    var h = tree(T, Int(cx) + di, Int(cy) + dj, o, d)
-                    if h[0] < best[0] and h[0] <= t1:  # a crown reached from inside the phase may lie past its end
-                        best = h
-        if mx < my:
+            for k in range(25 if full else 5):  # the whole window once, then only the column or row a step brings in
+                var di = k % 5 - 2 if full else (2 * Int(sx) if stepx else k - 2)
+                var dj = k // 5 - 2 if full else (k - 2 if stepx else 2 * Int(sy))
+                var h = tree(T, Int(cx) + di, Int(cy) + dj, o, d)
+                if h[0] < best[0] and h[0] <= t1:  # a crown reached from inside the phase may lie past its end
+                    best = h
+            full = False
+        elif trees:
+            full = True  # skipped slots: test the whole window at the next low step
+        stepx = mx < my
+        if stepx:
             enter = mx
             mx += ex
             cx += sx
