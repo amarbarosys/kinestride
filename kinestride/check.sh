@@ -11,6 +11,19 @@ if [ -z "${CHECK_LOCK_HELD:-}" ]; then  # a stage that calls another (solver -> 
   export CHECK_LOCK_HELD=1
 fi
 stage=${1:-kinematics}; M=.venv/bin/python; X=.work; fail=0
+if [ "$stage" = muscle ]; then
+  T=$X/muscle; mkdir -p "$T"
+  $M -m kinestride.muscle_check
+  $M kinestride/muscle_export_check.py "$T/export"
+  $M -c "from kinestride.model import export; export('kinestride/models/muscle_export.xml', '$T', regex='^$', act=True, limits=True)"
+  ~/iTools/bin/mojo-cached build $(cat "$T/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/smooth.mojo -o "$T/smooth" > "$T/build.log" 2>&1 \
+    || { echo "FAIL muscle build: $T/build.log"; exit 1; }
+  if [ "${BUILD_ONLY:-0}" = 1 ]; then echo "PASS muscle CPU build and export"; exit 0; fi
+  $M kinestride/muscle_engine_check.py "$T/smooth" "$T/run"
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/activation1 \* (1.0 - fatigue0)/activation0 * (1.0 - fatigue0)/' -- \
+    bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/muscle/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/smooth.mojo -o .work/muscle/mutant > .work/muscle/mutant-build.log 2>&1; .venv/bin/python kinestride/muscle_engine_check.py .work/muscle/mutant .work/muscle/mutant-run'
+  echo "PASS all muscle checks"; exit 0
+fi
 [ "${QUICK:-0}" = 1 ] && { echo "QUICK=1: no mutants (all states kept, same bars): an iteration run, NOT a gate (verify_commit runs the full stage)"; export QUICK; trap 'echo "QUICK=1 run finished: rerun without QUICK before READY"' EXIT; }
 if [ "$stage" = convex ]; then  # GJK + EPA narrowphase (convex.mojo, CPU build) vs MuJoCo mj_collision, per pair kind: float64 exact, float32 bars
   KINDS=${KINDS:-ellipsoid box}

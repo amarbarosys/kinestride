@@ -23,7 +23,7 @@ usage: smooth DIR/      reads DIR/mi.bin, mf.bin, qpos.bin (NQ x FLIES), qvel.bi
        (qpos rows, then qvel rows), the state after 10 steps to DIR/state10.bin when K divides 10
 """
 from std.ffi import external_call
-from std.math import cos, sin, sqrt
+from std.math import cos, exp, sin, sqrt
 from std.sys import argv, get_defined_int
 from std.time import perf_counter_ns
 from max.gpu import block_idx, block_dim, thread_idx
@@ -87,6 +87,7 @@ comptime HADR = CSIGN + NCH  # H's pattern: rowadr, rownnz, colind (same layout 
 comptime MTOH = HADR + 2 * NV + NH
 comptime CITER = MTOH + NC
 comptime NU = get_defined_int["NU", 0]()
+comptime NMUSCLE = get_defined_int["NMUSCLE", 0]()
 comptime CACT = CITER + 3  # STAGE 7 (model.py actuators): per actuator trntype, dof or body, ctrllimited, forcelimited, qpos address
 comptime NI1 = CACT + 5 * NU if STAGE >= 7 else (CITER + 3 if STAGE >= 6 else NI0)
 # model.py fluid() then tendons(), appended after the actuators: fluid ints per ellipsoid row (body, geom) then the inertia-box bodies
@@ -175,7 +176,8 @@ comptime COPT = CVERT + 3 * NHV
 comptime HFG = get_defined_int["HFGEOM", -1]()  # heightfield ground geom (model.py feet), else none
 comptime HFO = COPT + 5  # world.mojo params (NP)
 comptime CACF = HFO + (NP if HFG >= 0 else 0)  # STAGE 7: per actuator gain, bias 0-2, ctrlrange 2, forcerange 2, gear
-comptime NFL1 = CACF + 9 * NU if STAGE >= 7 else (CACF if STAGE >= 6 else NFL0)
+comptime CMUSF = CACF + 9 * NU  # optional eleven-float parameter rows, packed only for annotated muscles
+comptime NFL1 = CMUSF + 11 * NMUSCLE if STAGE >= 7 else (CACF if STAGE >= 6 else NFL0)
 comptime FLF = NFL1  # fluid floats: density, viscosity, wind 3, then per ellipsoid row semi-axes 3 and the 12 geom_fluid coefs
 comptime TNF = FLF + (5 + 15 * NFLROW if NFLUID else 0)  # tendon floats: wrap coefs, then stiffness, damping, lengthspring 2 per tendon
 comptime CSPF = TNF + NWRAP + 4 * NTEN
@@ -216,7 +218,8 @@ comptime OCQACC = ONCON + 1
 comptime OQFC = OCQACC + NV
 comptime OAF = OQFC + NV  # STAGE 7: actuator_force, qfrc_actuator
 comptime OQACT = OAF + NU
-comptime NOUT = OSC if STAGE == 1 else (OM + NC if STAGE == 2 else (OLDI + NV if STAGE == 3 else (OQH if STAGE == 4 else (OQPOS + NQ if STAGE == 5 else (OQFC + NV if STAGE == 6 else OQACT + NV)))))
+comptime OMUS = OQACT + NV  # persistent activation and fatigue rows, two per muscle
+comptime NOUT = OSC if STAGE == 1 else (OM + NC if STAGE == 2 else (OLDI + NV if STAGE == 3 else (OQH if STAGE == 4 else (OQPOS + NQ if STAGE == 5 else (OQFC + NV if STAGE == 6 else OMUS + 2 * NMUSCLE)))))
 comptime OTLEN = NOUT  # SPATIAL: tendon outputs after the stage's own: ten_length, ten_velocity, ten_J (dense, NV per tendon)
 comptime OTVEL = OTLEN + NTEN
 comptime OTJ = OTVEL + NTEN
@@ -1684,6 +1687,47 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             var w0 = Int(mi[TNI + t])
             for w in range(w0, w0 + Int(mi[TNI + NTEN + t])):
                 res[(OQACT + Int(mi[TNI + 2 * NTEN + w])) * F + f] += gear * mf[TNF + w] * force
+        elif NMUSCLE > 0 and mi[a] == 4:  # compile-time false for legacy models; state lives in persistent output rows
+            var t = Int(mi[a + 1])
+            var m = Int(mi[a + 4])
+            var p = CMUSF + 11 * m
+            var lv = tendon(mi, mf, qpos, qvel, f, t)
+            comptime if SPATIAL:
+                lv = (get(res, f, OTLEN + t), get(res, f, OTVEL + t))
+            var x = (lv[0] - mf[p + 1]) / mf[p + 2]
+            var fl = exp(-(x * x))
+            var vx = lv[1] / mf[p + 3]
+            var fv: Float32 = 0
+            if vx <= -1.0:
+                fv = 0
+            elif vx < 0.0:
+                fv = (1.0 + vx) / (1.0 - vx / mf[p + 4])
+            else:
+                fv = min(mf[p + 4], 1.0 + (mf[p + 4] - 1.0) * vx / (1.0 + vx))
+            var state = OMUS + 2 * m
+            var activation0 = get(res, f, state)
+            var fatigue0 = get(res, f, state + 1)
+            var tau = mf[p + 7] if c > activation0 else mf[p + 8]
+            var activation1 = c + (activation0 - c) * exp(-mf[TSTEP] / tau)
+            var output = activation0 * (1.0 - fatigue0) * fl * fv
+            output = 0.0 if output < 0.0 else (1.0 if output > 1.0 else output)
+            var rest = output == 0.0
+            tau = mf[p + 10] if rest else mf[p + 9]
+            var fatigue1 = output + (fatigue0 - output) * exp(-mf[TSTEP] / tau)
+            res[state * F + f] = activation1
+            res[(state + 1) * F + f] = fatigue1
+            var force = activation1 * (1.0 - fatigue0) * mf[p] * fl * fv
+            var stretch = lv[0] - mf[p + 6]
+            stretch = stretch if stretch > 0.0 else 0.0
+            force += mf[p + 5] * stretch * stretch
+            res[(OAF + u) * F + f] = force
+            comptime if SPATIAL:
+                for v in range(NV):
+                    res[(OQACT + v) * F + f] += get(res, f, OTJ + t * NV + v) * force
+                continue
+            var w0 = Int(mi[TNI + t])
+            for w in range(w0, w0 + Int(mi[TNI + NTEN + t])):
+                res[(OQACT + Int(mi[TNI + 2 * NTEN + w])) * F + f] += mf[TNF + w] * force
         else:  # body: adhesion over the body's contacts
             var body = Int(mi[a + 1])
             var counter = 0
@@ -3892,8 +3936,23 @@ def step(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int, rks: Int
             actuation(mi, mf, qpos, qvel, ctrl, res, f)
             comptime if GAME:  # physical work of this step: sum |qfrc_actuator x qvel| x dt (qvel before the step's update)
                 var work: Float32 = 0
-                for v in range(NV):
-                    work += abs(get(res, f, OQACT + v) * qvel[v * F + f]) * mf[TSTEP]
+                comptime if NMUSCLE > 0:
+                    for u in range(NU):
+                        var a = CACT + 5 * u
+                        if mi[a] != 4:
+                            continue
+                        var m = Int(mi[a + 4])
+                        var p = CMUSF + 11 * m
+                        var lv = tendon(mi, mf, qpos, qvel, f, Int(mi[a + 1]))
+                        comptime if SPATIAL:
+                            lv = (get(res, f, OTLEN + Int(mi[a + 1])), get(res, f, OTVEL + Int(mi[a + 1])))
+                        var stretch = lv[0] - mf[p + 6]
+                        stretch = stretch if stretch > 0.0 else 0.0
+                        var active = get(res, f, OAF + u) - mf[p + 5] * stretch * stretch
+                        work += abs(active * lv[1]) * mf[TSTEP]
+                else:
+                    for v in range(NV):
+                        work += abs(get(res, f, OQACT + v) * qvel[v * F + f]) * mf[TSTEP]
                 var next = game.advance_state(game.GameState(get(res, f, OGAME), get(res, f, OGAME + 1), get(res, f, OGAME + 2), get(res, f, OGAME + 3)),
                                               work, False, False, False, mf[GAMEF], mf[GAMEF + 1], 0, mf[GAMEF + 2], 0, 0)
                 res[OGAME * F + f] = next.energy
@@ -3943,6 +4002,9 @@ def main_cpu(dir: String) raises:
     var tv = host[DType.float32](qv, LV); var tu = host[DType.float32](uv, LU); var to = host[DType.float32](ob, LO)
     for f in range(F):
         smooth_at(ti, tf, tq, tv, tu, to, f)
+    comptime if NMUSCLE > 0:
+        with open(dir + "muscle-first.bin", "w") as file:
+            file.write_bytes(Span(unsafe_ptr=ob.unsafe_ptr(), length=NOUTX * F * 4))
     comptime if K > 0:
         with open(dir + "state.bin", "w") as file:
             file.write_bytes(Span(unsafe_ptr=qp.unsafe_ptr(), length=NQ * F * 4))
@@ -3998,6 +4060,12 @@ def main() raises:
     var kernel = ctx.compile_function[smooth]()
     ctx.enqueue_function(kernel, TileTensor(mi_b, LI), TileTensor(mf_b, LF), TileTensor(q_b, LQ), TileTensor(v_b, LV), TileTensor(u_b, LU), TileTensor(o_b, LO), grid_dim=GRID, block_dim=BLOCK)
     ctx.synchronize()
+    comptime if NMUSCLE > 0:
+        var first = List[Float32](length=NOUTX * F, fill=0)
+        ctx.enqueue_copy(first.unsafe_ptr(), o_b)
+        ctx.synchronize()
+        with open(dir + "muscle-first.bin", "w") as file:
+            file.write_bytes(Span(unsafe_ptr=first.unsafe_ptr().unsafe_bitcast[UInt8](), length=NOUTX * F * 4))
     comptime if K > 0:
         var state = List[Float32](length=(NQ + NV) * F, fill=0)
         ctx.enqueue_copy(state.unsafe_ptr(), q_b)
