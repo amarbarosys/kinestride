@@ -1132,28 +1132,61 @@ def mid_block(m):
 def actuators(m):
     """S3 tables: ints per actuator (transmission type, dof or body, ctrllimited, forcelimited, qpos address or -1),
     floats per actuator
-    (gain, bias 0-2, ctrlrange 2, forcerange 2, gear)."""
+    (gain, bias 0-2, ctrlrange 2, forcerange 2, gear), then eleven floats per annotated muscle."""
     T = mujoco.mjtTrn
+    muscles = {}
+    names = {}
     for i in range(m.nu):
+        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+        if name:
+            names[name] = i
+    for n in range(m.nnumeric):
+        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_NUMERIC, n) or ''
+        if not name.startswith('muscle_'):
+            continue
+        actuator = name[len('muscle_'):]
+        if actuator not in names or actuator in muscles:
+            raise SystemExit(f'FAIL export: muscle annotation {name!r} does not name one actuator exactly once')
+        if m.numeric_size[n] != 11:
+            raise SystemExit(f'FAIL export: {name} needs 11 numeric parameters')
+        p = m.numeric_data[m.numeric_adr[n]:m.numeric_adr[n] + 11].copy()
+        if not np.isfinite(p).all() or p[0] <= 0 or p[1] <= 0 or p[2] <= 0 or p[3] <= 0 or p[4] <= 1 or p[5] < 0 or p[6] < 0 or np.any(p[7:] <= 0):
+            raise SystemExit(f'FAIL export: {name} has invalid parameters (positive scales/times, eccentric cap > 1, passive stiffness >= 0)')
+        muscles[actuator] = p
+    muscle_ids = {name: i for i, name in enumerate(muscles)}
+    for i in range(m.nu):
+        name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or ''
+        is_muscle = name in muscles
         joint = m.actuator_trntype[i] == T.mjTRN_JOINT and m.jnt_type[m.actuator_trnid[i, 0]] in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE)
         if (not (joint or m.actuator_trntype[i] in (T.mjTRN_BODY, T.mjTRN_TENDON)) or m.actuator_gaintype[i] != mujoco.mjtGain.mjGAIN_FIXED
                 or m.actuator_biastype[i] not in (mujoco.mjtBias.mjBIAS_NONE, mujoco.mjtBias.mjBIAS_AFFINE)
                 or m.actuator_dyntype[i] != mujoco.mjtDyn.mjDYN_NONE or m.actuator_actearly[i] or m.actuator_delay[i]):
             raise SystemExit(f'FAIL export: actuator {i} is not a ported kind (hinge/slide joint, adhesion body or fixed tendon, fixed gain, no dynamics)')
+        if is_muscle:
+            tendon = int(m.actuator_trnid[i, 0]) if m.actuator_trntype[i] == T.mjTRN_TENDON else -1
+            fixed = tendon >= 0 and np.all(m.wrap_type[m.tendon_adr[tendon]:m.tendon_adr[tendon] + m.tendon_num[tendon]] == mujoco.mjtWrap.mjWRAP_JOINT)
+            if (not fixed or not m.actuator_ctrllimited[i] or m.actuator_ctrlrange[i, 0] != 0 or m.actuator_ctrlrange[i, 1] != 1
+                    or m.actuator_biastype[i] != mujoco.mjtBias.mjBIAS_NONE):
+                raise SystemExit(f'FAIL export: muscle {name} needs a fixed tendon, no bias, and ctrlrange 0 1')
         if m.actuator_trntype[i] == T.mjTRN_BODY:
             b = m.actuator_trnid[i, 0]
             if any(m.pair_gap[k] > 0 and b in (m.geom_bodyid[m.pair_geom1[k]], m.geom_bodyid[m.pair_geom2[k]]) for k in range(m.npair)):
                 raise SystemExit(f'FAIL export: adhesion actuator {i} on a body with a gap pair (excluded contacts in the gap band transmit adhesion in MuJoCo; not ported)')
-    ints = np.array([[m.actuator_trntype[i], m.jnt_dofadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else m.actuator_trnid[i, 0],  # tendon: its id
+    ints = np.array([[(4 if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or '') in muscles else m.actuator_trntype[i]),
+                      muscle_ids[mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i)] if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or '') in muscles else (m.jnt_dofadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else m.actuator_trnid[i, 0]),  # type 4: muscle, index in appended parameter table
                       m.actuator_ctrllimited[i], m.actuator_forcelimited[i],
                       m.jnt_qposadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else -1] for i in range(m.nu)])
     bias = np.where((m.actuator_biastype == mujoco.mjtBias.mjBIAS_AFFINE)[:, None], m.actuator_biasprm[:, :3], 0)
     floats = np.concatenate([m.actuator_gainprm[:, :1], bias, m.actuator_ctrlrange, m.actuator_forcerange, m.actuator_gear[:, :1]], axis=1)
-    return ints.ravel(), floats.ravel()
+    params = np.array(list(muscles.values()), dtype=np.float64).reshape(-1, 11)
+    return ints.ravel(), np.concatenate([floats.ravel(), params.ravel()]), len(muscles)
 
 
 def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits=None):
     m, out = load(mjcf), Path(out)
+    has_muscle = any((mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_NUMERIC, n) or '').startswith('muscle_') for n in range(m.nnumeric))
+    if has_muscle and not act:
+        raise SystemExit('FAIL export: muscle annotations require the stage-7 actuator block')
     cross = cross_trees(m, regex, convex)
     if cross and (m.opt.integrator != mujoco.mjtIntegrator.mjINT_EULER
                   or m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON
@@ -1174,8 +1207,10 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
         ci, cf, cs = feet(m, regex or '^$', [e['union'] for e in eq], hr, convex, hfexact, hl)
         ints, floats, sizes = ints + [ci], floats + [cf], sizes | cs
     if act:
-        ai, af = actuators(m)
+        ai, af, nmuscle = actuators(m)
         ints, floats = ints + [ai], floats + [af]
+        if nmuscle:
+            sizes['NMUSCLE'] = nmuscle
     for block in (fluid(m), tendons(m), spatial(m), convex_block(m, regex, convex, hfexact, hl[0] if hl else None) if regex and (convex or hfexact) else None):  # last, so every earlier block keeps its offsets and a model without them its bytes
         if block:
             ints, floats, sizes = ints + [block[0]], floats + [block[1]], sizes | block[2]

@@ -1,0 +1,20 @@
+<mujoco model="muscle_export">
+  <option timestep="0.002" gravity="0 0 0" noslip_iterations="0"/>
+  <worldbody>
+    <body name="arm">
+      <joint name="hinge" type="hinge" axis="0 1 0" damping="0.1"/>
+      <geom name="arm_geom" type="capsule" fromto="0 0 0 0.2 0 0" size="0.02"/>
+      <site name="origin" pos="0 0 0"/>
+      <site name="tip" pos="0.2 0 0"/>
+    </body>
+  </worldbody>
+  <tendon>
+    <fixed name="flexor"><joint joint="hinge" coef="1"/></fixed>
+  </tendon>
+  <actuator>
+    <motor name="flexor_muscle" tendon="flexor" ctrllimited="true" ctrlrange="0 1"/>
+  </actuator>
+  <custom>
+    <numeric name="muscle_flexor_muscle" data="10 1 0.25 1 1.5 0 0 0.04 0.07 8 20"/>
+  </custom>
+</mujoco>
