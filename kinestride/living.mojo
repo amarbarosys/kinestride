@@ -40,10 +40,10 @@ def slot(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
 @always_inline
 def cone_part(kind: Int, part: Int) -> F4:
     """Cone `part` of a tree of `kind` as (base, radius, height, exists) in fractions of the tree's height and crown
-    radius: web/world.mjs TREE_CONES. 0 spruce two tiers, 1 beech up and down cone over a bare trunk, 2 fern, 3 birch
+    radius: web/world.mjs TREE_CONES. 0 spruce one slender cone, 1 beech up and down cone over a bare trunk, 2 fern, 3 birch
     narrow and high, 4 alder up and down, 5 pine a flat umbrella high on the trunk."""
     if kind == 0:
-        return F4(0, 1, 0.6, 1) if part == 0 else F4(0.35, 0.7, 0.65, 1)
+        return F4(0.1, 0.85, 0.9, 1) if part == 0 else F4(0, 0, 0, 0)
     if kind == 1:
         return F4(0.35, 1, 0.65, 1) if part == 0 else F4(0.35, 1, -0.3, 1)
     if kind == 4:
