@@ -55,6 +55,7 @@ struct Viewer(Movable):
     var sm_b: DeviceBuffer[DType.uint64]  # shadow map (render.mojo SHADOW=2)
     var scam_b: DeviceBuffer[DType.float32]
     var img_b: DeviceBuffer[DType.uint32]
+    var low_b: DeviceBuffer[DType.uint32]
     var out_h: HostBuffer[DType.uint32]
     var camh: List[Float32]
 
@@ -93,6 +94,7 @@ struct Viewer(Movable):
         self.sm_b = ctx.enqueue_create_buffer[DType.uint64](ren.NSM)
         self.scam_b = ctx.enqueue_create_buffer[DType.float32](ren.NCAM)
         self.img_b = ctx.enqueue_create_buffer[DType.uint32](ren.W * ren.H)
+        self.low_b = ctx.enqueue_create_buffer[DType.uint32](ren.HW * ren.HH)
         self.out_h = ctx.enqueue_create_host_buffer[DType.uint32](ren.W * ren.H)
         self.camh = List[Float32](length=ren.NCAM, fill=0)
         for k in range(6):
@@ -127,10 +129,10 @@ struct Viewer(Movable):
                 TileTensor(self.v_b, eng.LV), TileTensor(self.u_b, eng.LU), TileTensor(self.o_b, eng.LO), grid_dim=eng.GRID, block_dim=eng.BLOCK)
 
     def frame(mut self, ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[ren.clear]()), kr: type_of(DeviceContext(0).compile_function[ren.raster]()),
-              ks: type_of(DeviceContext(0).compile_function[ren.shade]()), ksc: type_of(DeviceContext(0).compile_function[ren.suncam]()),
+              ks: type_of(DeviceContext(0).compile_function[ren.shade]()), ku: type_of(DeviceContext(0).compile_function[ren.upscale]()), ksc: type_of(DeviceContext(0).compile_function[ren.suncam]()),
               kcs: type_of(DeviceContext(0).compile_function[ren.clear_sm]())) raises:
         """The renderer's passes over the engine's current poses into img_b (camera from cam_b)."""
-        ren.frame(ctx, kc, kr, ks, ksc, kcs, TileTensor(self.vis_b, ren.LVIS), TileTensor(self.sm_b, ren.LVIS),
-            TileTensor(self.img_b, ren.LVIS), TileTensor(self.pi_b, ren.LPI), TileTensor(self.pf_b, ren.LPF), TileTensor(self.rv_b, ren.LRV),
+        ren.frame(ctx, kc, kr, ks, ku, ksc, kcs, TileTensor(self.vis_b, ren.LVIS), TileTensor(self.sm_b, ren.LVIS),
+            TileTensor(self.img_b, ren.LVIS), TileTensor(self.low_b, ren.LLOW), TileTensor(self.pi_b, ren.LPI), TileTensor(self.pf_b, ren.LPF), TileTensor(self.rv_b, ren.LRV),
             TileTensor(self.rt_b, ren.LRT), TileTensor(self.rp_b, ren.LRP), TileTensor(self.o_b, ren.LPOSE), TileTensor(self.cam_b, ren.LCAM),
             TileTensor(self.scam_b, ren.LCAM))

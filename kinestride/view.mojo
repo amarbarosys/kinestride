@@ -24,6 +24,7 @@ def main() raises:
     var kc = ctx.compile_function[ren.clear]()
     var kr = ctx.compile_function[ren.raster]()
     var ks = ctx.compile_function[ren.shade]()
+    var ku = ctx.compile_function[ren.upscale]()
     var ksc = ctx.compile_function[ren.suncam]()
     var kcs = ctx.compile_function[ren.clear_sm]()
     var fr = 0
@@ -31,7 +32,7 @@ def main() raises:
         v.step(ctx, ke)
         comptime if eng.CPU:  # the renderer reads the device rows
             ctx.enqueue_copy(v.o_b, v.ob.unsafe_ptr().unsafe_bitcast[Float32]())
-        v.frame(ctx, kc, kr, ks, ksc, kcs)
+        v.frame(ctx, kc, kr, ks, ku, ksc, kcs)
         ctx.enqueue_copy(v.out_h, v.img_b)
         ctx.synchronize()
         fr += 1

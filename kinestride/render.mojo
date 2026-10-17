@@ -96,6 +96,10 @@ comptime NSM = NAUX if NAUX > 0 else 1  # sm buffer size (uint64), what callers 
 comptime BLOB = Float32(get_defined_int["BLOB_UM", 1200]()) * 1e-3  # SHADOW=1 blob radius, mm
 comptime TVIS = TileTensor[DType.uint64, type_of(LVIS), MutAnyOrigin]
 comptime TIMG = TileTensor[DType.uint32, type_of(LVIS), MutAnyOrigin]
+comptime HW = (W + 1) // 2
+comptime HH = (H + 1) // 2
+comptime LLOW = row_major[HW * HH]()
+comptime TLOW = TileTensor[DType.uint32, type_of(LLOW), MutAnyOrigin]
 comptime TPI = TileTensor[DType.int32, type_of(LPI), MutAnyOrigin]
 comptime TPF = TileTensor[DType.float32, type_of(LPF), MutAnyOrigin]
 comptime TRV = TileTensor[DType.int16, type_of(LRV), MutAnyOrigin]
@@ -770,7 +774,7 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
     return sky(view)
 
 
-def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM):
+def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= W * H:
         return
@@ -788,6 +792,10 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
     var mk = sm.ptr.unsafe_offset(OMR + i)[] if REFLECT else EMPTY
     var gk = sm.ptr.unsafe_offset(OGL + i)[] if GLASS else EMPTY
     var glass = gk != EMPTY and depth(gk) < z0
+    comptime if LIVING:
+        if key == EMPTY and not glass and ((i % W) & 1 != 0 or (i // W) & 1 != 0):
+            img[i] = 0
+            return
     var fly = (front and pi[5 * Int(rp[Int(key & TMASK)])] > 0) or glass  # alpha: animal parts only (not world parts)
     var ao = occlusion(vis, i, z0, c[4]) if z0 < 3.4e38 else Float32(1)
     var col = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, key, depth(key) / c[4], ao, mk)
@@ -836,7 +844,49 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
     var r = UInt32(min(sqrt(max(col[0], 0)), 1) * 255)
     var gg = UInt32(min(sqrt(max(col[1], 0)), 1) * 255)
     var b = UInt32(min(sqrt(max(col[2], 0)), 1) * 255)
-    img[i] = r | gg << 8 | b << 16 | (UInt32(255) if fly else UInt32(0)) << 24
+    var pixel = r | gg << 8 | b << 16 | (UInt32(255) if fly else UInt32(0)) << 24
+    img[i] = pixel
+    comptime if LIVING:
+        if ((i % W) & 1) == 0 and ((i // W) & 1) == 0:
+            if key == EMPTY and not glass:
+                low[(i // W // 2) * HW + (i % W // 2)] = pixel
+            else:
+                var bg = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, EMPTY, Float32(3.4e38), 1, EMPTY)
+                low[(i // W // 2) * HW + (i % W // 2)] = UInt32(min(sqrt(max(agx(bg[0]), 0)), 1) * 255) | UInt32(min(sqrt(max(agx(bg[1]), 0)), 1) * 255) << 8 | UInt32(min(sqrt(max(agx(bg[2]), 0)), 1) * 255) << 16
+
+
+def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= W * H:
+        return
+    comptime if LIVING:
+        if vis[i] != EMPTY:
+            return
+        comptime if GLASS:
+            if sm.ptr.unsafe_offset(OGL + i)[] != EMPTY:
+                return
+        var x = i % W
+        var y = i // W
+        var fx = Float32(x) * 0.5
+        var fy = Float32(y) * 0.5
+        var x0 = min(Int(floor(fx)), HW - 1)
+        var y0 = min(Int(floor(fy)), HH - 1)
+        var x1 = min(x0 + 1, HW - 1)
+        var y1 = min(y0 + 1, HH - 1)
+        var tx = fx - Float32(x0)
+        var ty = fy - Float32(y0)
+        var a = low[y0 * HW + x0]
+        var b = low[y0 * HW + x1]
+        var c = low[y1 * HW + x0]
+        var d = low[y1 * HW + x1]
+        var out = UInt32(0)
+        for k in range(3):
+            var shift = UInt32(8 * k)
+            var av = Float32((a >> shift) & 255) * (1 - tx) + Float32((b >> shift) & 255) * tx
+            var cv = Float32((c >> shift) & 255) * (1 - tx) + Float32((d >> shift) & 255) * tx
+            var value = UInt32(av * (1 - ty) + cv * ty)
+            out |= value << shift
+        img[i] = out
 
 
 def clear_sm(sm: TVIS):
@@ -846,8 +896,8 @@ def clear_sm(sm: TVIS):
 
 
 def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clear]()), kr: type_of(DeviceContext(0).compile_function[raster]()),
-          ks: type_of(DeviceContext(0).compile_function[shade]()), ksc: type_of(DeviceContext(0).compile_function[suncam]()),
-          kcs: type_of(DeviceContext(0).compile_function[clear_sm]()), vis: TVIS, sm: TVIS, img: TIMG, tpi: TPI, tpf: TPF, trv: TRV, trt: TRT,
+          ks: type_of(DeviceContext(0).compile_function[shade]()), ku: type_of(DeviceContext(0).compile_function[upscale]()), ksc: type_of(DeviceContext(0).compile_function[suncam]()),
+          kcs: type_of(DeviceContext(0).compile_function[clear_sm]()), vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, tpi: TPI, tpf: TPF, trv: TRV, trt: TRT,
           trp: TRP, tpose: TPOSE, tcam: TCAM, tscam: TCAM) raises:
     """One frame's passes on the card: aux layers cleared, (SHADOW=2) sun camera + shadow map, view raster, (GLASS) the
     see-through layer, (REFLECT) the mirror layer; shade."""
@@ -863,12 +913,14 @@ def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clea
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OGL), Int32(1), grid_dim=g, block_dim=256)
     comptime if REFLECT:
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), grid_dim=g, block_dim=256)
-    ctx.enqueue_function(ks, vis, sm, img, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
+    ctx.enqueue_function(ks, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
+    comptime if LIVING:
+        ctx.enqueue_function(ku, vis, sm, img, low, grid_dim=(W * H + 255) // 256, block_dim=256)
 
 
 def stream(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clear]()), kr: type_of(DeviceContext(0).compile_function[raster]()),
-           ks: type_of(DeviceContext(0).compile_function[shade]()), ksc: type_of(DeviceContext(0).compile_function[suncam]()),
-           kcs: type_of(DeviceContext(0).compile_function[clear_sm]()), vis: TVIS, sm: TVIS, img: TIMG, tpi: TPI, tpf: TPF, trv: TRV, trt: TRT, trp: TRP,
+           ks: type_of(DeviceContext(0).compile_function[shade]()), ku: type_of(DeviceContext(0).compile_function[upscale]()), ksc: type_of(DeviceContext(0).compile_function[suncam]()),
+           kcs: type_of(DeviceContext(0).compile_function[clear_sm]()), vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, tpi: TPI, tpf: TPF, trv: TRV, trt: TRT, trp: TRP,
            tpose: TPOSE, tcam: TCAM, tscam: TCAM, cam_b: type_of(DeviceContext(0).enqueue_create_buffer[DType.float32](NCAM)), mut camh: List[Float32],
            img_b: type_of(DeviceContext(0).enqueue_create_buffer[DType.uint32](W * H)), out_h: type_of(DeviceContext(0).enqueue_create_host_buffer[DType.uint32](W * H)),
            frames: Int) raises:
@@ -882,7 +934,7 @@ def stream(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[cle
         camh[0] = tx + rx * cos(ang) - ry * sin(ang)
         camh[1] = ty + rx * sin(ang) + ry * cos(ang)
         ctx.enqueue_copy(cam_b, camh.unsafe_ptr())
-        frame(ctx, kc, kr, ks, ksc, kcs, vis, sm, img, tpi, tpf, trv, trt, trp, tpose, tcam, tscam)
+        frame(ctx, kc, kr, ks, ku, ksc, kcs, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, tscam)
         ctx.enqueue_copy(out_h, img_b)
         ctx.synchronize()
         var left = W * H * 4
@@ -943,6 +995,7 @@ def main() raises:
     var sm_b = ctx.enqueue_create_buffer[DType.uint64](NSM)
     var scam_b = ctx.enqueue_create_buffer[DType.float32](NCAM)
     var img_b = ctx.enqueue_create_buffer[DType.uint32](W * H)
+    var low_b = ctx.enqueue_create_buffer[DType.uint32](HW * HH)
     var out_h = ctx.enqueue_create_host_buffer[DType.uint32](W * H)
     ctx.enqueue_copy(pi_b, pi_h.unsafe_ptr().unsafe_bitcast[Int32]())
     ctx.enqueue_copy(pf_b, pf_h.unsafe_ptr().unsafe_bitcast[Float32]())
@@ -954,12 +1007,14 @@ def main() raises:
     var kc = ctx.compile_function[clear]()
     var kr = ctx.compile_function[raster]()
     var ks = ctx.compile_function[shade]()
+    var ku = ctx.compile_function[upscale]()
     var ksc = ctx.compile_function[suncam]()
     var kcs = ctx.compile_function[clear_sm]()
     var vis = TileTensor(vis_b, LVIS)
     var sm = TileTensor(sm_b, LVIS)  # NSM texels: read only when SHADOW == 2, then NSM == W * H
     var tscam = TileTensor(scam_b, LCAM)
     var img = TileTensor(img_b, LVIS)
+    var low = TileTensor(low_b, LLOW)
     var tpi = TileTensor(pi_b, LPI)
     var tpf = TileTensor(pf_b, LPF)
     var trv = TileTensor(rv_b, LRV)
@@ -968,14 +1023,14 @@ def main() raises:
     var tpose = TileTensor(pose_b, LPOSE)
     var tcam = TileTensor(cam_b, LCAM)
     if String(a[3]) == "-":
-        stream(ctx, kc, kr, ks, ksc, kcs, vis, sm, img, tpi, tpf, trv, trt, trp, tpose, tcam, tscam, cam_b, camh, img_b, out_h, frames)
+        stream(ctx, kc, kr, ks, ku, ksc, kcs, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, tscam, cam_b, camh, img_b, out_h, frames)
         return
     var t0 = perf_counter_ns()
     for fr in range(frames + 1):
         if fr == 1:
             ctx.synchronize()
             t0 = perf_counter_ns()
-        frame(ctx, kc, kr, ks, ksc, kcs, vis, sm, img, tpi, tpf, trv, trt, trp, tpose, tcam, tscam)
+        frame(ctx, kc, kr, ks, ku, ksc, kcs, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, tscam)
         ctx.enqueue_copy(out_h, img_b)
     ctx.synchronize()
     var ms = Float64(perf_counter_ns() - t0) / Float64(max(frames, 1)) / 1e6
