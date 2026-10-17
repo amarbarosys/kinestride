@@ -1150,7 +1150,7 @@ def actuators(m):
         if m.numeric_size[n] != 11:
             raise SystemExit(f'FAIL export: {name} needs 11 numeric parameters')
         p = m.numeric_data[m.numeric_adr[n]:m.numeric_adr[n] + 11].copy()
-        if not np.isfinite(p).all() or p[0] <= 0 or p[1] <= 0 or p[2] <= 0 or p[3] <= 0 or p[4] <= 1 or p[5] < 0 or p[6] < 0 or np.any(p[7:] <= 0):
+        if not np.isfinite(p).all() or p[0] <= 0 or p[2] <= 0 or p[3] <= 0 or p[4] <= 1 or p[5] < 0 or p[6] < 0 or np.any(p[7:] <= 0):
             raise SystemExit(f'FAIL export: {name} has invalid parameters (positive scales/times, eccentric cap > 1, passive stiffness >= 0)')
         muscles[actuator] = p
     muscle_ids = {name: i for i, name in enumerate(muscles)}
@@ -1166,16 +1166,17 @@ def actuators(m):
             tendon = int(m.actuator_trnid[i, 0]) if m.actuator_trntype[i] == T.mjTRN_TENDON else -1
             fixed = tendon >= 0 and np.all(m.wrap_type[m.tendon_adr[tendon]:m.tendon_adr[tendon] + m.tendon_num[tendon]] == mujoco.mjtWrap.mjWRAP_JOINT)
             if (not fixed or not m.actuator_ctrllimited[i] or m.actuator_ctrlrange[i, 0] != 0 or m.actuator_ctrlrange[i, 1] != 1
-                    or m.actuator_biastype[i] != mujoco.mjtBias.mjBIAS_NONE):
-                raise SystemExit(f'FAIL export: muscle {name} needs a fixed tendon, no bias, and ctrlrange 0 1')
+                    or m.actuator_biastype[i] != mujoco.mjtBias.mjBIAS_NONE or m.actuator_forcelimited[i]
+                    or not np.isclose(m.actuator_gear[i, 0], 1)):
+                raise SystemExit(f'FAIL export: muscle {name} needs a fixed tendon, no bias or force limit, unit gear, and ctrlrange 0 1')
         if m.actuator_trntype[i] == T.mjTRN_BODY:
             b = m.actuator_trnid[i, 0]
             if any(m.pair_gap[k] > 0 and b in (m.geom_bodyid[m.pair_geom1[k]], m.geom_bodyid[m.pair_geom2[k]]) for k in range(m.npair)):
                 raise SystemExit(f'FAIL export: adhesion actuator {i} on a body with a gap pair (excluded contacts in the gap band transmit adhesion in MuJoCo; not ported)')
     ints = np.array([[(4 if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or '') in muscles else m.actuator_trntype[i]),
-                      muscle_ids[mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i)] if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or '') in muscles else (m.jnt_dofadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else m.actuator_trnid[i, 0]),  # type 4: muscle, index in appended parameter table
+                      m.jnt_dofadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else m.actuator_trnid[i, 0],  # tendon id remains in the ordinary transmission slot
                       m.actuator_ctrllimited[i], m.actuator_forcelimited[i],
-                      m.jnt_qposadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else -1] for i in range(m.nu)])
+                      muscle_ids[mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i)] if (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_ACTUATOR, i) or '') in muscles else (m.jnt_qposadr[m.actuator_trnid[i, 0]] if m.actuator_trntype[i] == T.mjTRN_JOINT else -1)] for i in range(m.nu)])
     bias = np.where((m.actuator_biastype == mujoco.mjtBias.mjBIAS_AFFINE)[:, None], m.actuator_biasprm[:, :3], 0)
     floats = np.concatenate([m.actuator_gainprm[:, :1], bias, m.actuator_ctrlrange, m.actuator_forcerange, m.actuator_gear[:, :1]], axis=1)
     params = np.array(list(muscles.values()), dtype=np.float64).reshape(-1, 11)

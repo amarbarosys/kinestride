@@ -16,8 +16,8 @@ def check(out):
     out = Path(out)
     m = mujoco.MjModel.from_xml_path(str(FIXTURE))
     ints, floats, count = model.actuators(m)
-    assert count == 1 and ints.reshape(-1, 5)[0].tolist() == [4, 0, 1, 0, -1]
-    params = np.array([10, 1, .25, 1, 1.5, 0, 0, .04, .07, 8, 20])
+    assert count == 1 and ints.reshape(-1, 5)[0].tolist() == [4, 0, 1, 0, 0]
+    params = np.array([10, 0, .25, 1, 1.5, 0, 0, .04, .07, 8, 20])
     assert np.allclose(floats[-11:], params)
     exported = model.export(m, out / "good", act=True)
     assert exported.nu == 1 and "NMUSCLE=1" in (out / "good/sizes.txt").read_text()
