@@ -36,7 +36,7 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
 from city import city_hit
-from living import cell, lw_albedo, lw_hit, lw_lit, sky_cam
+from living import cell, lw_albedo, lw_hit, lw_lit, sky_cam, tree
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -236,6 +236,29 @@ def vnoise(x: Float32, y: Float32) -> Float32:
     var a = hash2(ix, iy) + (hash2(ix + 1, iy) - hash2(ix, iy)) * fx
     var b = hash2(ix, iy + 1) + (hash2(ix + 1, iy + 1) - hash2(ix, iy + 1)) * fx
     return a + (b - a) * fy
+
+
+@always_inline
+def tree_shadow(T: Pointer[Float32, _], o: V3, d: V3, far: Float32) -> Float32:
+    """Soft near-field shadow from analytic tree slots along the sun ray."""
+    var step = T[0] / T[3] * 0.5
+    var last_i = -2147483647
+    var last_j = -2147483647
+    for k in range(48):
+        var t = step * (Float32(k) + 0.5)
+        if t > far:
+            break
+        var p = o + d * t
+        var i = Int(floor(p[0] / (T[0] / T[3])))
+        var j = Int(floor(p[1] / (T[0] / T[3])))
+        if i == last_i and j == last_j:
+            continue
+        last_i = i
+        last_j = j
+        var hit = tree(T, i, j, o, d)
+        if hit[0] > 0.01 and hit[0] < far:
+            return 0.42
+    return 1
 
 
 @always_inline
@@ -454,11 +477,16 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     var hit = eye + ray * h[0]
     var u = hit / cam[16]
     var n = V3(h[1], h[2], h[3], 0)
+    var ambient = ao
     var view = unit(ray)
     var mat = Int(h[4])
     var sh = lw_lit(T, u[0], u[1], cam[28], cam[29])
     comptime if SHADOW == 2:
         sh = min(sh, shadow_map(sm, cam, hit, EMPTY, dot(n, sun(cam))))
+    if mat == 1 and cam[30] < 0.99 and h[0] * sqrt(dot(ray, ray)) / cam[16] < 60:
+        var tree_sh = tree_shadow(T, u + n * 0.02, sun(cam), 60 / cam[16])
+        sh = min(sh, tree_sh)
+        ambient = min(ambient, 0.5 + 0.5 * tree_sh)
     var col: V3
     if mat == 2:  # water: two travelling swells tilt the normal; the sky by Fresnel, a sun glint
         var t = cam[27]
@@ -466,7 +494,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var r = view - n * (2 * dot(view, n))
         var fr = 0.02 + 0.98 * pow(1 - max(-dot(n, view), Float32(0)), Float32(5))
         var a = lw_albedo(T, u[0], u[1])
-        col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
+        col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ambient, 0) * (1 - fr) + living_sky(cam, r) * fr
         col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), Float32(200)) * 3 * (1 - cam[30]))
     elif mat >= 3:  # a tree: leaf colour by species (web/world.mjs SPECIES), glow-fern lit at night (hue per tree)
         var g = h[5] * cam[30]
@@ -482,7 +510,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
             var qy = vnoise(hit[0] * 2, hit[1] * 2 + 0.13) - vnoise(hit[0] * 2, hit[1] * 2 - 0.13)
             base *= 0.82 + 0.36 * q
             leaf_n = unit(n + V3(qx, qy, 0, 0) * 0.2)
-        col = light(cam, base * base, leaf_n, view, sh, ao, 0.1) + base * base * (1.6 * g)
+        col = light(cam, base * base, leaf_n, view, sh, ambient, 0.1) + base * base * (1.6 * g)
         if mat != 9:  # backlight through leaf edges and crowns
             var rim = pow(1 - abs(dot(leaf_n, view)), Float32(2))
             var back = max(dot(-leaf_n, sun(cam)), Float32(0))
@@ -500,7 +528,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1)) * Float32(1 - get_defined_int["LW_NOCANOPY", 0]())  # dark green: a stand's crowns
         grain = grain * (1 - canopy) + canopy * (0.55 + 0.9 * vnoise(hit[0] * 0.17, hit[1] * 0.17) * vnoise(hit[0] * 0.5 + 7, hit[1] * 0.5))  # 6 m crowns, gaps
         var base = V3(a[0], a[1], a[2], 0) * grain
-        col = light(cam, base * base, n, view, sh, ao * a[3], 0)
+        col = light(cam, base * base, n, view, sh, ambient * a[3], 0)
     var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
     var k = 0.006 * (0.6 + 0.5 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, a little thicker in valleys
     var far = pf[LWO] * Float32(LIVING_FAR) / 128
