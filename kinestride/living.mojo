@@ -127,6 +127,31 @@ def cone(o: F4, d: F4, c: F4, r: Float32, h: Float32) -> F4:
 
 
 @always_inline
+def ellipsoid(o: F4, d: F4, c: F4, r: Float32, rz: Float32) -> F4:
+    """(t, normal) of the ray on an ellipsoid crown: centre c, horizontal radius r, vertical radius rz."""
+    var k = r / rz  # squash z so the crown is a sphere of radius r
+    var ox = o[0] - c[0]
+    var oy = o[1] - c[1]
+    var oz = (o[2] - c[2]) * k
+    var dz = d[2] * k
+    var A = d[0] * d[0] + d[1] * d[1] + dz * dz
+    var B = 2 * (ox * d[0] + oy * d[1] + oz * dz)
+    var C = ox * ox + oy * oy + oz * oz - r * r
+    var disc = B * B - 4 * A * C
+    if disc < 0:
+        return F4(BIG, 0, 0, 0)
+    var s = sqrt(disc)
+    var t = (-B - s) / (2 * A)
+    if t <= 1e-4:
+        t = (-B + s) / (2 * A)
+        if t <= 1e-4:
+            return F4(BIG, 0, 0, 0)
+    var n = F4(ox + t * d[0], oy + t * d[1], (oz + t * dz) * k, 0)
+    n = n / sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
+    return F4(t, n[0], n[1], n[2])
+
+
+@always_inline
 def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
     """The tree of slot (ti, tj) along the ray: (t, normal, material, glow, hue)."""
     var tr = tree_at(T, ti, tj)
@@ -134,7 +159,11 @@ def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
     if kind < 0:
         return F8(BIG, 0, 0, 0, 0, 0, 0, 0)
     var best = F4(BIG, 0, 0, 0)
-    for part in range(2):
+    if kind == 1 or kind == 3 or kind == 4 or kind == 5:  # broadleaf and pine crowns: ellipsoids (centre, vertical radius) x H
+        var cz = Float32(0.56) if kind == 1 else (Float32(0.62) if kind == 3 else (Float32(0.55) if kind == 4 else Float32(0.82)))
+        var rz = Float32(0.42) if kind == 1 else (Float32(0.38) if kind == 3 else (Float32(0.45) if kind == 4 else Float32(0.14)))
+        best = ellipsoid(o, d, F4(tr[0], tr[1], tr[2] + cz * tr[3], 0), tr[4] * (Float32(1) if kind == 5 else Float32(1.4)), rz * tr[3])
+    for part in range(0 if kind == 1 or kind == 3 or kind == 4 or kind == 5 else 2):
         var c = cone_part(kind, part)
         if c[3] == 0:
             break
