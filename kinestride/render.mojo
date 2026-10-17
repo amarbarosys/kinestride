@@ -419,11 +419,23 @@ def living(cam: TCAM, pf: TPF, eye: V3, ray: V3) -> SIMD[DType.float32, 8]:
 
 
 @always_inline
-def living_sky(cam: TCAM, view: V3) -> V3:
-    """The web's sky: horizon to zenith by elevation, sun disc and halo, stars at night (linear)."""
+def atmosphere(cam: TCAM, view: V3) -> V3:
+    """Rayleigh blue scatter and forward Mie glow over the time-of-day sky gradient."""
     var f = min(max(view[2] / 0.8, Float32(0)), Float32(1))
     var c = V3(cam[23], cam[24], cam[25], 0) * (1 - f) + V3(cam[20], cam[21], cam[22], 0) * f
     c = c * c
+    var day = 1 - cam[30]
+    var mu = dot(view, sun(cam))
+    var rayleigh = 0.08 * (1 + mu * mu) * day
+    var mie = 0.002 * (1 - 0.8 * 0.8) / pow(max(1 + 0.8 * 0.8 - 1.6 * mu, Float32(0.02)), Float32(1.5)) * day
+    var air = 0.2 + 0.8 * exp(-max(view[2], Float32(0)) * 2)
+    return c + V3(0.08, 0.22, 0.58, 0) * (rayleigh * air) + V3(1, 0.46, 0.2, 0) * mie
+
+
+@always_inline
+def living_sky(cam: TCAM, view: V3) -> V3:
+    """Analytic atmosphere, sun disc and halo, stars at night (linear)."""
+    var c = atmosphere(cam, view)
     if cam[30] < 0.5:
         var r = (1 - dot(view, sun(cam))) / 1.6e-4  # ~1 deg disc
         c += V3(1, 0.85, 0.6, 0) * (Float32(1.4) if r < 1 else 0.25 * exp(-(sqrt(r) - 1) * 0.7))
@@ -483,8 +495,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     var far = pf[LWO] * Float32(LIVING_FAR) / 128
     var fog = max(1 - exp(-max(d - 2.5, Float32(0)) * k), min(max((d - far * 0.7) / (far * 0.3), Float32(0)), Float32(1)))
     fog *= Float32(1 - get_defined_int["LW_NOFOG", 0]())  # debug: LW_NOFOG=1 shows the bare surface
-    var hor = V3(cam[23], cam[24], cam[25], 0)
-    return (col * (1 - fog) + hor * hor * fog) * cam[26]
+    return (col * (1 - fog) + atmosphere(cam, unit(ray)) * fog) * cam[26]
 
 
 @always_inline
