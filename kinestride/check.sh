@@ -39,6 +39,23 @@ if [ "$stage" = muscle ]; then
   "$T/muscle-demo" "$T/spider/" 500 sine
   echo "PASS all muscle checks"; exit 0
 fi
+if [ "$stage" = game ]; then
+  T=$X/muscle-game; mkdir -p "$T"
+  $M -m kinestride.game_state_check
+  $M kinestride/muscle_game_check.py prepare "$T"
+  FLAGS=$(cat "$T/sizes.txt")
+  if [ "${BUILD_ONLY:-0}" = 1 ]; then
+    ~/iTools/bin/mojo-cached build $FLAGS -DFLIES=1 -DSTAGE=7 -DK=0 -DGAME=1 -DCPU=1 -I kinestride kinestride/muscle_demo.mojo -o "$T/demo-cpu" > "$T/build-cpu.log" 2>&1 \
+      || { echo "FAIL muscle game CPU build: $T/build-cpu.log"; exit 1; }
+    echo "PASS game CPU build and game-state oracle"; exit 0
+  fi
+  ~/iTools/bin/mojo-cached build $FLAGS -DFLIES=1 -DSTAGE=7 -DK=0 -DGAME=1 -I kinestride kinestride/muscle_demo.mojo -o "$T/demo" > "$T/build.log" 2>&1 \
+    || { echo "FAIL muscle game GPU build: $T/build.log"; exit 1; }
+  $M kinestride/muscle_game_check.py "$T/demo" "$T/run"
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/work += abs(active \* lv\[1\]) \* mf\[TSTEP\]/work += 0.0/' -- \
+    bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/muscle-game/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=0 -DGAME=1 -I kinestride kinestride/muscle_demo.mojo -o .work/muscle-game/mutant > .work/muscle-game/mutant-build.log 2>&1; .venv/bin/python kinestride/muscle_game_check.py .work/muscle-game/mutant .work/muscle-game/mutant-run'
+  echo "PASS muscle game checks"; exit 0
+fi
 [ "${QUICK:-0}" = 1 ] && { echo "QUICK=1: no mutants (all states kept, same bars): an iteration run, NOT a gate (verify_commit runs the full stage)"; export QUICK; trap 'echo "QUICK=1 run finished: rerun without QUICK before READY"' EXIT; }
 if [ "$stage" = convex ]; then  # GJK + EPA narrowphase (convex.mojo, CPU build) vs MuJoCo mj_collision, per pair kind: float64 exact, float32 bars
   KINDS=${KINDS:-ellipsoid box}

@@ -9,7 +9,7 @@ from pathlib import Path
 from kinestride.game_events import Animal, Event, Rules, _self_check, replay
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "kinestride/game_state.mojo"
 
 
