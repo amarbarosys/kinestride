@@ -18,7 +18,7 @@ This exact constant-rate update separates depletion from slower recovery. It is 
 
 ## Force
 
-Active force is `a (1-f) Fmax FL FV`. Length factor is Gaussian around optimum length: `FL = exp(-((l-lopt)/width)^2)`. With normalized speed `x = v/vmax`, shortening uses `FV = max(0, 1 + x/(1-x))`; lengthening uses `FV = min(eccentric_cap, 1 + (eccentric_cap-1)x/(1+x))`. Thus shortening force falls smoothly toward zero and lengthening force rises to a cap. Passive force is `kpassive max(0, l-lslack)^2`.
+Active force is `a (1-f) Fmax FL FV`. Length factor is Gaussian around optimum length: `FL = exp(-((l-lopt)/width)^2)`. Speed convention: `v > 0` means lengthening and `v < 0` means shortening. With normalized speed `x = v/vmax`, use `FV = max(0, (1+x)/(1-x/eccentric_cap))` for `-1 <= x <= 0`, and `FV = min(eccentric_cap, 1 + (eccentric_cap-1)x/(1+x))` for `x > 0`. The branches meet continuously at `FV(0)=1`; the shortening branch is exactly zero at `x=-1` and rises toward one as shortening speed approaches zero. Lengthening force rises smoothly to its cap. Passive force is `kpassive max(0, l-lslack)^2`.
 
 The existing fixed tendon supplies length, speed, and moment arm. No geometry path is added. Parameters per muscle: `Fmax, lopt, width, vmax, eccentric_cap, kpassive, lslack, tau_rise, tau_fall, tau_fatigue, tau_recovery`. Positive scales and times are required.
 

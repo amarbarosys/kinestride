@@ -37,7 +37,7 @@ def length_factor(length, p=Params()):
 def velocity_factor(speed, p=Params()):
     x = speed / p.vmax
     if x < 0:
-        return max(0.0, 1.0 + x / (1.0 - x))
+        return max(0.0, (1.0 + x) / (1.0 - x / p.eccentric_cap))
     return min(p.eccentric_cap, 1.0 + (p.eccentric_cap - 1.0) * x / (1.0 + x))
 
 
@@ -53,7 +53,10 @@ def check():
     assert abs(fatigue(0, 1, p.tau_fatigue) - (1 - exp(-1))) < 1e-12
     assert abs(fatigue(1, 0, p.tau_recovery) - exp(-1)) < 1e-12
     assert abs(force(1, 0, p.lopt, 0, p) - p.fmax) < 1e-12
-    assert velocity_factor(-0.5, p) < 1 < velocity_factor(0.5, p) < p.eccentric_cap
+    expected = (0.0, 0.375, 1.0, 7.0 / 6.0)
+    observed = tuple(velocity_factor(x, p) for x in (-1.0, -0.5, 0.0, 0.5))
+    assert all(abs(a - b) < 1e-12 for a, b in zip(observed, expected)), (observed, expected)
+    assert observed[0] == 0 and observed[2] == 1 and observed[1] < 1 < observed[3] < p.eccentric_cap
     one = activation(0.2, 0.9, 0.12, p)
     two = activation(activation(0.2, 0.9, 0.03, p), 0.9, 0.09, p)
     assert abs(one - two) < 1e-12
