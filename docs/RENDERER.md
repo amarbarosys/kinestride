@@ -184,3 +184,12 @@ triangles), so the animal field shrinks as the model grows (`comptime assert F <
 arena's box and ellipsoid geoms (`meshes(world=[])`); alpha marks animal parts only. Compared side by side with MuJoCo
 (2026-10-09, render_check views): textured golden-brown body, see-through wings, reflections, arena walls; the floor stays
 our grey checker (MuJoCo's is its dark grid material). 960 x 540 frame 0.72 -> 1.15 ms with glass, mirror and arena.
+
+## Living World graphics tier (2026-10-17)
+
+With `-DLIVING=1`, terrain and sky shade at half resolution, then bilinear-upscale to the window size. Mesh-hit
+pixels stay full resolution. This is spatial upscale, not TAA. At 1280 x 720 it adds 640 x 360 uint32 scratch
+(921,600 bytes); the 600-frame walk gate measured 6.26 ms after upscale, down from 6.54 ms with full-resolution
+terrain shading. Near tree-slot shadows add sun-ray occlusion and soft ground AO. The soft-crown revision is
+still a candidate: visual review accepts it, but isolated timing pairs vary from 7.19 to 9.85 ms; the latest
+baseline/patch pair was 6.696/9.847 ms, above the 1.1x baseline cap. Project refs remain unchanged.
