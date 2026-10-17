@@ -192,4 +192,6 @@ pixels stay full resolution. This is spatial upscale, not TAA. At 1280 x 720 it 
 (921,600 bytes); the 600-frame walk gate measured 6.26 ms after upscale, down from 6.54 ms with full-resolution
 terrain shading. Near tree-slot shadows add sun-ray occlusion and soft ground AO. The soft-crown revision is
 still a candidate: visual review accepts it, but isolated timing pairs vary from 7.19 to 9.85 ms; the latest
-baseline/patch pair was 6.696/9.847 ms, above the 1.1x baseline cap. Project refs remain unchanged.
+baseline/patch pair was 6.696/9.847 ms, above the 1.1x baseline cap.
+
+State after review (2026-10-17): half-res upscale committed (d507312). Tree shadows reverted (493cdd3): the hard version drew flat discs and a wrong-scale wedge, the soft version costs ~3 ms. Soft patch parked in living-world `.work/graphics/item4-soft-only.patch`; next try is to shade it inside the half-res pass. Bloom and god rays: two attempts changed 0 pixels in noon/dusk/night; a sun-facing review frame now exists (living-world bb73699). Gate 6.46 ms.
