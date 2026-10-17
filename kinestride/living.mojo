@@ -21,7 +21,7 @@ comptime F8 = SIMD[DType.float32, 8]
 comptime BIG = Float32(3.4e38)
 comptime NEAR_M = Float32(get_defined_int["LIVING_NEAR", 150]())  # trees are geometry within this range (SCALE.md section 2)
 comptime HMAX_M = Float32(40)  # tallest tree, the slot height scale and the ray's skip bound
-comptime HDR = 8  # world.bin header floats: N, sea, C, TN, max terrain height, 3 spare
+comptime HDR = 8  # world.bin header: N, sea, C, TN, max terrain height, then the offsets of cells (= HDR), slots, tail
 comptime CROWN = SIMD[DType.float32, 8](0.085, 0.25, 0.6, 0.13, 0.2, 0.22, 0, 0)
 
 
@@ -33,9 +33,8 @@ def cell(T: Pointer[Float32, _], i: Int, j: Int, c: Int) -> Float32:
 
 @always_inline
 def slot(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
-    var n = Int(T[0])
     var tn = Int(T[3])
-    return T[HDR + 5 * n * n + ((j % tn) + tn) % tn * tn + ((i % tn) + tn) % tn]
+    return T[Int(T[6]) + ((j % tn) + tn) % tn * tn + ((i % tn) + tn) % tn]
 
 
 @always_inline

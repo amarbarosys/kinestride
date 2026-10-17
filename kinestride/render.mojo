@@ -68,7 +68,7 @@ comptime NEAR = Float32(1e-3)
 
 comptime LVIS = row_major[W * H]()
 comptime LPI = row_major[5 * NPART]()
-comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * (8 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]())]()
+comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * 8]()  # parts, then the world header; the table runs on past it (LWF)
 comptime RVI = 9  # int16 per vertex in rv.bin: position 3, unit normal x 32767 3, rgb 0..255 3 (callers load 2 * RVI * NRV bytes)
 comptime LRV = row_major[NRV * RVI]()  # all positions, then all normals, then all colours
 comptime LRT = row_major[NRT]()
@@ -80,7 +80,7 @@ comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the 
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
 comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's endless city, 1 unit = 1 m (cam[16:20]: seed, origin cell x y, far m)
 comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
-comptime LWF = (8 + 5 * get_defined_int["LIVING_N", 128]() * get_defined_int["LIVING_N", 128]() + get_defined_int["LIVING_TN", 512]() * get_defined_int["LIVING_TN", 512]()) if LIVING else 0  # world floats: header, terrain, tree slots
+comptime LWF = 8 if LIVING else 0  # world floats the layout covers: the header only. The table is as long as world.bin, read through T = pf + LWO
 comptime LWO = PFS * NPART  # where the world table starts in pf
 comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in terrain cells (125 x 20 m = 2.5 km, SCALE.md)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
@@ -859,13 +859,13 @@ def main() raises:
     var pi_h = load(rdir + "rmi.bin", 20 * NPART)
     var pf_h = load(rdir + "rmf.bin", 4 * PFS * NPART)
     comptime if LIVING:  # the world table rides behind the parts (LWO); path from LIVING_BIN
-        pf_h += load(String(getenv("LIVING_BIN")), 4 * LWF)
+        pf_h += open(String(getenv("LIVING_BIN")), "r").read_bytes()
     var rv_h = load(rdir + "rv.bin", 2 * RVI * NRV)
     var rt_h = load(rdir + "rt.bin", 2 * NRT)
     var rp_h = load(rdir + "rp.bin", NTRI)
     var pose_h = load(String(a[2]), 4 * PROWS * F)
     var pi_b = ctx.enqueue_create_buffer[DType.int32](5 * NPART)
-    var pf_b = ctx.enqueue_create_buffer[DType.float32](PFS * NPART + LWF)
+    var pf_b = ctx.enqueue_create_buffer[DType.float32](len(pf_h) // 4)
     var rv_b = ctx.enqueue_create_buffer[DType.int16](RVI * NRV)
     var rt_b = ctx.enqueue_create_buffer[DType.uint16](NRT)
     var rp_b = ctx.enqueue_create_buffer[DType.uint8](NTRI)
