@@ -1711,9 +1711,10 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             var activation1 = c + (activation0 - c) * exp(-mf[TSTEP] / tau)
             var output = activation0 * (1.0 - fatigue0) * fl * fv
             output = 0.0 if output < 0.0 else (1.0 if output > 1.0 else output)
-            var rest = output == 0.0
+            var rest = c == 0.0
+            var fatigue_target = 0.0 if rest else output
             tau = mf[p + 10] if rest else mf[p + 9]
-            var fatigue1 = output + (fatigue0 - output) * exp(-mf[TSTEP] / tau)
+            var fatigue1 = fatigue_target + (fatigue0 - fatigue_target) * exp(-mf[TSTEP] / tau)
             res[state * F + f] = activation1
             res[(state + 1) * F + f] = fatigue1
             var force = activation1 * (1.0 - fatigue0) * mf[p] * fl * fv

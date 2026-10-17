@@ -23,9 +23,10 @@ def activation(a, u, dt, p=Params()):
     return u + (a - u) * exp(-dt / tau)
 
 
-def fatigue(f, output, dt, p=Params()):
-    target = min(1.0, max(0.0, output))
-    tau = p.tau_fatigue if target > 0 else p.tau_recovery
+def fatigue(f, output, dt, p=Params(), resting=None):
+    resting = output == 0 if resting is None else resting
+    target = 0.0 if resting else min(1.0, max(0.0, output))
+    tau = p.tau_recovery if resting else p.tau_fatigue
     return target + (f - target) * exp(-dt / tau)
 
 

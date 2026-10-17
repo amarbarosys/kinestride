@@ -16,12 +16,27 @@ if [ "$stage" = muscle ]; then
   $M -m kinestride.muscle_check
   $M kinestride/muscle_export_check.py "$T/export"
   $M -c "from kinestride.model import export; export('kinestride/models/muscle_export.xml', '$T', regex='^$', act=True, limits=True)"
+  $M kinestride/muscle_demo_check.py "$T/spider"
   ~/iTools/bin/mojo-cached build $(cat "$T/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/smooth.mojo -o "$T/smooth" > "$T/build.log" 2>&1 \
     || { echo "FAIL muscle build: $T/build.log"; exit 1; }
-  if [ "${BUILD_ONLY:-0}" = 1 ]; then echo "PASS muscle CPU build and export"; exit 0; fi
+  ~/iTools/bin/mojo-cached build $(cat "$T/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=0 -DCPU=1 -I kinestride kinestride/muscle_demo.mojo -o "$T/trace-cpu" > "$T/trace-build-cpu.log" 2>&1 \
+    || { echo "FAIL muscle trace CPU build: $T/trace-build-cpu.log"; exit 1; }
+  if [ "${BUILD_ONLY:-0}" = 1 ]; then
+    ~/iTools/bin/mojo-cached build $(cat "$T/spider/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=1 -DCPU=1 -I kinestride kinestride/muscle_demo.mojo -o "$T/muscle-demo-cpu" > "$T/demo-build-cpu.log" 2>&1 \
+      || { echo "FAIL muscle demo CPU build: $T/demo-build-cpu.log"; exit 1; }
+    echo "PASS muscle CPU build and export"; exit 0
+  fi
   $M kinestride/muscle_engine_check.py "$T/smooth" "$T/run"
+  ~/iTools/bin/mojo-cached build $(cat "$T/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=0 -I kinestride kinestride/muscle_demo.mojo -o "$T/trace" > "$T/trace-build.log" 2>&1 \
+    || { echo "FAIL muscle trace GPU build: $T/trace-build.log"; exit 1; }
+  $M kinestride/muscle_trace_check.py "$T/trace" "$T/trace-run"
   ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/activation1 \* (1.0 - fatigue0)/activation0 * (1.0 - fatigue0)/' -- \
     bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/muscle/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/smooth.mojo -o .work/muscle/mutant > .work/muscle/mutant-build.log 2>&1; .venv/bin/python kinestride/muscle_engine_check.py .work/muscle/mutant .work/muscle/mutant-run'
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/tau = mf\[p + 10\] if rest else mf\[p + 9\]/tau = mf[p + 9]/' -- \
+    bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/muscle/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=0 -I kinestride kinestride/muscle_demo.mojo -o .work/muscle/fatigue-mutant > .work/muscle/fatigue-mutant-build.log 2>&1; .venv/bin/python kinestride/muscle_trace_check.py .work/muscle/fatigue-mutant .work/muscle/fatigue-mutant-run'
+  ~/iTools/bin/mojo-cached build $(cat "$T/spider/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/muscle_demo.mojo -o "$T/muscle-demo" > "$T/demo-build.log" 2>&1 \
+    || { echo "FAIL muscle demo GPU build: $T/demo-build.log"; exit 1; }
+  "$T/muscle-demo" "$T/spider/" 500 sine
   echo "PASS all muscle checks"; exit 0
 fi
 [ "${QUICK:-0}" = 1 ] && { echo "QUICK=1: no mutants (all states kept, same bars): an iteration run, NOT a gate (verify_commit runs the full stage)"; export QUICK; trap 'echo "QUICK=1 run finished: rerun without QUICK before READY"' EXIT; }

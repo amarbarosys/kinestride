@@ -10,7 +10,7 @@ For constant excitation `u` during `dt`, activation is
 
 Use `tau_rise` when `u > a`, otherwise `tau_fall`. This closed form has no explicit-Euler stability limit.
 
-Fatigue `f` is in `[0,1]`. Let `p` be normalized active output at the start of the step. During use, `f_inf = p` and `tau = tau_fatigue`; at rest, `f_inf = 0` and `tau = tau_recovery`:
+Fatigue `f` is in `[0,1]`. Let `p` be normalized active output at the start of the step. During excitation, `f_inf = p` and `tau = tau_fatigue`; when excitation is zero, `f_inf = 0` and `tau = tau_recovery`, including the activation tail as it falls:
 
 `f' = f_inf + (f - f_inf) exp(-dt / tau)`
 

@@ -30,7 +30,7 @@ def check(binary, work):
     got_force, got_qfrc, got_activation, got_fatigue = rows[-4:]
     p = Params(fmax=10, lopt=0, width=.25, vmax=1, eccentric_cap=1.5,
                kpassive=0, lslack=0, tau_rise=.04, tau_fall=.07,
-               tau_fatigue=8, tau_recovery=20)
+               tau_fatigue=.08, tau_recovery=.25)
     a1 = activation(0, 1, m.opt.timestep, p)
     f0 = fatigue(0, 0, m.opt.timestep, p)
     expected_force = force(a1, 0, 0, -.5, p)
