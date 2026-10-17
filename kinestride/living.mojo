@@ -142,6 +142,10 @@ def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
         if h[0] < best[0]:
             best = h
     var hue = Float32(((ti * 73856093) ^ (tj * 19349663)) & 1023) / 1023
+    if kind != 2:  # the trunk: a thin cone to 0.9 H, material 9, species in the last lane (bark colour)
+        var tk = cone(o, d, F4(tr[0], tr[1], tr[2], 0), 0.012 * tr[3], 0.9 * tr[3])
+        if tk[0] < best[0]:
+            return F8(tk[0], tk[1], tk[2], tk[3], 9, 0, hue, Float32(kind))
     return F8(best[0], best[1], best[2], best[3], Float32(3 + kind), Float32(1) if kind == 2 else Float32(0), hue, 0)
 
 

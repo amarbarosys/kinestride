@@ -82,7 +82,7 @@ comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's end
 comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
 comptime LWF = 8 if LIVING else 0  # world floats the layout covers: the header only. The table is as long as world.bin, read through T = pf + LWO
 comptime LWO = PFS * NPART  # where the world table starts in pf
-comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in terrain cells (125 x 20 m = 2.5 km, SCALE.md)
+comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in cells per 128 of the world's N (125 x 20 m = 2.5 km at N 128, SCALE.md)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
 comptime AA = get_defined_int["AA", 1]()  # 1: silhouette pixels average 4 analytic sub-rays
@@ -413,7 +413,7 @@ def street(sm: TVIS, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32, 8], ao:
 def living(cam: TCAM, pf: TPF, eye: V3, ray: V3) -> SIMD[DType.float32, 8]:
     """living.mojo's first surface along ray (any length), in metres (cam[16] per world unit): t as this ray's parameter."""
     var l = sqrt(dot(ray, ray))
-    var h = lw_hit(pf.ptr.unsafe_offset(LWO), eye / cam[16], ray / l, Float32(LIVING_FAR))
+    var h = lw_hit(pf.ptr.unsafe_offset(LWO), eye / cam[16], ray / l, pf[LWO] * Float32(LIVING_FAR) / 128)  # scales with the world's N
     h[0] = h[0] * cam[16] / l if h[0] < 1e30 else Float32(3.4e38)
     return h
 
@@ -459,8 +459,10 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     elif mat >= 3:  # a tree: leaf colour by species (web/world.mjs SPECIES), glow-fern lit at night (hue per tree)
         var g = h[5] * cam[30]
         var sp = mat - 3
-        var leaf = V3(0.05, 0.17, 0.09, 0) if sp == 0 else (V3(0.16, 0.3, 0.08, 0) if sp == 1 else (V3(0.06, 0.2, 0.08, 0) if sp == 2 else (V3(0.3, 0.42, 0.12, 0) if sp == 3 else (V3(0.2, 0.28, 0.1, 0) if sp == 4 else V3(0.17, 0.24, 0.16, 0)))))
+        var leaf = V3(0.08, 0.24, 0.12, 0) if sp == 0 else (V3(0.16, 0.3, 0.08, 0) if sp == 1 else (V3(0.06, 0.2, 0.08, 0) if sp == 2 else (V3(0.3, 0.42, 0.12, 0) if sp == 3 else (V3(0.2, 0.28, 0.1, 0) if sp == 4 else V3(0.17, 0.24, 0.16, 0)))))
         var base = leaf * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g
+        if mat == 9:  # bark: birch white-grey, the rest brown, a little variation per tree
+            base = (V3(0.72, 0.7, 0.64, 0) if Int(h[7]) == 3 else V3(0.3, 0.21, 0.14, 0)) * (0.85 + 0.3 * h[6])
         col = light(cam, base * base, n, view, sh, ao, 0.1) + base * base * (1.6 * g)
     else:
         var a = lw_albedo(T, u[0], u[1])
@@ -468,17 +470,19 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         # 3 spruce moss, 4 heather clumps, 5 beech leaf litter
         var hb = Int(cell(T, Int(floor(u[0] + 0.5)), Int(floor(u[1] + 0.5)), 4))
         var fq = Float32(1.25) if hb == 0 else (Float32(2) if hb == 1 else (Float32(3.3) if hb == 2 else (Float32(1.5) if hb == 3 else (Float32(2) if hb == 4 else Float32(1)))))
-        var amp = Float32(0.7) if hb == 0 else (Float32(0.3) if hb == 1 else (Float32(0.35) if hb == 2 else (Float32(0.15) if hb == 3 else (Float32(0.5) if hb == 4 else Float32(0.4)))))
+        var amp = Float32(0.4) if hb == 0 else (Float32(0.3) if hb == 1 else (Float32(0.35) if hb == 2 else (Float32(0.15) if hb == 3 else (Float32(0.5) if hb == 4 else Float32(0.4)))))
         var nx = hit[0] * fq * (Float32(0.35) if hb == 2 else Float32(1))  # grass: streaks along y
         var grain = 1 - amp * 0.5 + amp * vnoise(nx, hit[1] * fq)
         var far = min(max((h[0] * sqrt(dot(ray, ray)) - 100) / 100, Float32(0)), Float32(1))  # past 100-200 m
-        var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1))  # dark green: a stand's crowns
+        var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1)) * Float32(1 - get_defined_int["LW_NOCANOPY", 0]())  # dark green: a stand's crowns
         grain = grain * (1 - canopy) + canopy * (0.55 + 0.9 * vnoise(hit[0] * 0.17, hit[1] * 0.17) * vnoise(hit[0] * 0.5 + 7, hit[1] * 0.5))  # 6 m crowns, gaps
         var base = V3(a[0], a[1], a[2], 0) * grain
         col = light(cam, base * base, n, view, sh, ao * a[3], 0)
     var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
-    var k = 0.006 * (0.6 + 0.9 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, thicker in valleys
-    var fog = max(1 - exp(-max(d - 2.5, Float32(0)) * k), min(max((d - Float32(LIVING_FAR) * 0.7) / (Float32(LIVING_FAR) * 0.3), Float32(0)), Float32(1)))
+    var k = 0.006 * (0.6 + 0.5 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, a little thicker in valleys
+    var far = pf[LWO] * Float32(LIVING_FAR) / 128
+    var fog = max(1 - exp(-max(d - 2.5, Float32(0)) * k), min(max((d - far * 0.7) / (far * 0.3), Float32(0)), Float32(1)))
+    fog *= Float32(1 - get_defined_int["LW_NOFOG", 0]())  # debug: LW_NOFOG=1 shows the bare surface
     var hor = V3(cam[23], cam[24], cam[25], 0)
     return (col * (1 - fog) + hor * hor * fog) * cam[26]
 
