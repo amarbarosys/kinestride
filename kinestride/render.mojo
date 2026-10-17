@@ -26,7 +26,7 @@ usage: render RENDER_DIR/ POSES.bin OUT FRAMES ex ey ez tx ty tz fovy_deg spacin
 """
 from std.atomic import Atomic, Ordering
 from std.ffi import external_call
-from std.math import cos, exp, floor, pow, sin, sqrt, tan
+from std.math import cos, exp, floor, log, pow, sin, sqrt, tan
 from std.memory import bitcast
 from std.os import getenv
 from std.sys import argv, get_defined_int
@@ -618,6 +618,18 @@ def sky(view: V3) -> V3:
 
 
 @always_inline
+def agx(x: Float32) -> Float32:
+    """AgX fitted sigmoid on exposure-scaled linear light."""
+    var y = min(max((log(max(x, Float32(1e-10))) / 0.6931472 + 10) / 16, Float32(0)), Float32(1))
+    var y2 = y * y
+    var y3 = y2 * y
+    var y4 = y3 * y
+    var y5 = y4 * y
+    var y6 = y5 * y
+    return min(max(15.5 * y6 - 40.14 * y5 + 31.96 * y4 - 6.868 * y3 + 0.4298 * y2 + 0.1191 * y - 0.00232, Float32(0)), Float32(1))
+
+
+@always_inline
 def animal(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
            key: UInt64, tt: Float32, ao: Float32, mirror: Bool) -> V3:
     """Linear colour of animal triangle `key` along ray (at ray parameter tt): smooth normal and vertex colour, sun with its
@@ -769,6 +781,8 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp
     if glass:  # a see-through part in front: its colour over the scene at its alpha
         var a = pf[PFS * Int(rp[Int(gk & TMASK)]) + 20]
         col = col * (1 - a) + animal(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, gk, depth(gk) / c[4], 1, False) * a
+    comptime if LIVING:
+        col = V3(agx(col[0]), agx(col[1]), agx(col[2]), 0)
     var r = UInt32(min(sqrt(max(col[0], 0)), 1) * 255)
     var gg = UInt32(min(sqrt(max(col[1], 0)), 1) * 255)
     var b = UInt32(min(sqrt(max(col[2], 0)), 1) * 255)
