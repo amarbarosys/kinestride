@@ -820,25 +820,62 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
     img[i] = pixel
     comptime if LIVING:
         if ((i % W) & 1) == 0 and ((i // W) & 1) == 0:
-            if key == EMPTY and not glass:
-                low[(i // W // 2) * HW + (i % W // 2)] = pixel
+            if key == EMPTY and not glass:  # alpha 255 marks open sky for glow's shaft march
+                low[(i // W // 2) * HW + (i % W // 2)] = (pixel & 0xFFFFFF) | (UInt32(255) << 24 if g[0] >= 3.4e38 else UInt32(0))
             else:
                 var bg = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, EMPTY, Float32(3.4e38), 1, EMPTY)
                 low[(i // W // 2) * HW + (i % W // 2)] = UInt32(min(sqrt(max(agx(bg[0]), 0)), 1) * 255) | UInt32(min(sqrt(max(agx(bg[1]), 0)), 1) * 255) << 8 | UInt32(min(sqrt(max(agx(bg[2]), 0)), 1) * 255) << 16
 
 
-def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW):
+@always_inline
+def glow(img: TIMG, low: TLOW, cam: TCAM, i: Int, x: Int, y: Int):
+    """Bloom + god rays (LIVING, day): 16 taps from the pixel toward the sun's screen point over low's open-sky
+    mask; the open fraction times a radial falloff, added in display space. A blocked sun loses its halo."""
+    if cam[30] >= 0.5:
+        return
+    var c = camera(cam)
+    var s = sun(cam)
+    var fz = dot(s, c[3])
+    if fz <= 0.05:
+        return
+    var sx = c[4] * dot(s, c[1]) / fz + Float32(W) * 0.5
+    var sy = -c[4] * dot(s, c[2]) / fz + Float32(H) * 0.5
+    var dx = sx - Float32(x)
+    var dy = sy - Float32(y)
+    var r = sqrt(dx * dx + dy * dy) / Float32(H)
+    var fall = 0.45 * exp(-r * 3.5) + 0.35 * exp(-r * 18)
+    if fall < 0.01:
+        return
+    var open = Float32(0)
+    for k in range(16):
+        var t = (Float32(k) + 0.5) / 16
+        var lx = min(max(Int((Float32(x) + dx * t) * 0.5), 0), HW - 1)
+        var ly = min(max(Int((Float32(y) + dy * t) * 0.5), 0), HH - 1)
+        open += Float32(low[ly * HW + lx] >> 24) / 255
+    var a = fall * open / 16 * min(fz * 4, Float32(1)) * (1 - 2 * cam[30])
+    var p = img[i]
+    var out = p & 0xFF000000
+    var tint = V3(1, 0.85, 0.6, 0)
+    for k in range(3):
+        var shift = UInt32(8 * k)
+        out |= UInt32(min(Float32((p >> shift) & 255) + a * tint[k] * 255, Float32(255))) << shift
+    img[i] = out
+
+
+def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, cam: TCAM):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= W * H:
         return
     comptime if LIVING:
-        if vis[i] != EMPTY:
-            return
-        comptime if GLASS:
-            if sm.ptr.unsafe_offset(OGL + i)[] != EMPTY:
-                return
         var x = i % W
         var y = i // W
+        var bgpx = vis[i] == EMPTY
+        comptime if GLASS:
+            if sm.ptr.unsafe_offset(OGL + i)[] != EMPTY:
+                bgpx = False
+        if not bgpx:
+            glow(img, low, cam, i, x, y)
+            return
         var fx = Float32(x) * 0.5
         var fy = Float32(y) * 0.5
         var x0 = min(Int(floor(fx)), HW - 1)
@@ -859,6 +896,7 @@ def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW):
             var value = UInt32(av * (1 - ty) + cv * ty)
             out |= value << shift
         img[i] = out
+        glow(img, low, cam, i, x, y)
 
 
 def clear_sm(sm: TVIS):
@@ -887,7 +925,7 @@ def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clea
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), grid_dim=g, block_dim=256)
     ctx.enqueue_function(ks, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
     comptime if LIVING:
-        ctx.enqueue_function(ku, vis, sm, img, low, grid_dim=(W * H + 255) // 256, block_dim=256)
+        ctx.enqueue_function(ku, vis, sm, img, low, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
 
 
 def stream(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clear]()), kr: type_of(DeviceContext(0).compile_function[raster]()),
