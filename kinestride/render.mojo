@@ -695,11 +695,12 @@ def animal(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
 
 @always_inline
 def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
-           key: UInt64, tt: Float32, ao: Float32, mk: UInt64) -> V3:
+           key: UInt64, tt: Float32, ao: Float32, mk: UInt64, h0: SIMD[DType.float32, 8] = SIMD[DType.float32, 8](-1)) -> V3:
     """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
-    else the ground or box (the flat floor mixes in the mirror layer's key mk at REFL), else the sky. Fog: ground only."""
+    else the ground or box (the flat floor mixes in the mirror layer's key mk at REFL), else the sky. Fog: ground only.
+    LIVING: h0 is this ray's living() hit when the caller has marched it already (h0[0] < 0: march here)."""
     comptime if LIVING:
-        var h = living(cam, pf, eye, ray)
+        var h = h0 if h0[0] >= 0 else living(cam, pf, eye, ray)
         if key != EMPTY and tt < h[0]:
             return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False) * cam[26]
         return meadow(sm, pf, cam, eye, ray, h, ao) if h[0] < 3.4e38 else living_sky(cam, unit(ray)) * cam[26]
@@ -755,22 +756,25 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
     var py = Float32(i // W) + 0.5 - Float32(H) * 0.5
     var ray = c[3] * c[4] + c[1] * px - c[2] * py
     var key = vis[i]
-    var g = ground_hit(cam, pf, c[0], ray)
+    var gk = sm.ptr.unsafe_offset(OGL + i)[] if GLASS else EMPTY
+    comptime if LIVING:  # half-res: open-sky odd pixels come from upscale, so they skip the march
+        if key == EMPTY and gk == EMPTY and ((i % W) & 1 != 0 or (i // W) & 1 != 0):
+            img[i] = 0
+            return
+    var h = SIMD[DType.float32, 8](-1)  # LIVING: this pixel's one march, shared by every sample() below
+    comptime if LIVING:
+        h = living(cam, pf, c[0], ray)
+    var g = (h[0], -1) if LIVING else ground_hit(cam, pf, c[0], ray)
     comptime if CITY_DEPTH:
         img[i] = bitcast[DType.uint32](g[0] * sqrt(dot(ray, ray)) if g[0] < 3.4e38 else Float32(1e30))
         return
     var front = key != EMPTY and depth(key) < g[0] * c[4]  # raster depth is view z = ray parameter x focal
     var z0 = depth(key) if front else g[0] * c[4]
     var mk = sm.ptr.unsafe_offset(OMR + i)[] if REFLECT else EMPTY
-    var gk = sm.ptr.unsafe_offset(OGL + i)[] if GLASS else EMPTY
     var glass = gk != EMPTY and depth(gk) < z0
-    comptime if LIVING:
-        if key == EMPTY and not glass and ((i % W) & 1 != 0 or (i // W) & 1 != 0):
-            img[i] = 0
-            return
     var fly = (front and pi[5 * Int(rp[Int(key & TMASK)])] > 0) or glass  # alpha: animal parts only (not world parts)
     var ao = occlusion(vis, i, z0, c[4]) if z0 < 3.4e38 else Float32(1)
-    var col = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, key, depth(key) / c[4], ao, mk)
+    var col = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, key, depth(key) / c[4], ao, mk, h)
     comptime if AA:
         var x = i % W
         var y = i // W
@@ -823,7 +827,7 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
             if key == EMPTY and not glass:  # alpha 255 marks open sky for glow's shaft march
                 low[(i // W // 2) * HW + (i % W // 2)] = (pixel & 0xFFFFFF) | (UInt32(255) << 24 if g[0] >= 3.4e38 else UInt32(0))
             else:
-                var bg = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, EMPTY, Float32(3.4e38), 1, EMPTY)
+                var bg = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, EMPTY, Float32(3.4e38), 1, EMPTY, h)
                 low[(i // W // 2) * HW + (i % W // 2)] = UInt32(min(sqrt(max(agx(bg[0]), 0)), 1) * 255) | UInt32(min(sqrt(max(agx(bg[1]), 0)), 1) * 255) << 8 | UInt32(min(sqrt(max(agx(bg[2]), 0)), 1) * 255) << 16
 
 
