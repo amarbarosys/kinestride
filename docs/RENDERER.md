@@ -195,3 +195,5 @@ still a candidate: visual review accepts it, but isolated timing pairs vary from
 baseline/patch pair was 6.696/9.847 ms, above the 1.1x baseline cap.
 
 State after review (2026-10-17): half-res upscale committed (d507312). Tree shadows reverted (493cdd3): the hard version drew flat discs and a wrong-scale wedge, the soft version costs ~3 ms. Soft patch parked in living-world `.work/graphics/item4-soft-only.patch`; next try is to shade it inside the half-res pass. Bloom and god rays: two attempts changed 0 pixels in noon/dusk/night; a sun-facing review frame now exists (living-world bb73699). Gate 6.46 ms.
+
+State after gfx2 (2026-10-22): one march per shaded pixel (e322441). `shade()` skips open-sky odd pixels before any march, marches once, and passes the hit to `sample()` as `h0` (also to the low-buffer sample). Walk gate 6.06 to 3.72 ms, images byte-identical, 0 B. Soft tree shadows dropped on the look (Mario, 2026-10-22; +12% over S1). N 256 needs no max-height mip at present: 2.17 ms vs 3.76 ms at N 128 on the same gate. Report: `.work/gfx2/REPORT.md` in the Kinestride checkout.
