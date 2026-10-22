@@ -506,6 +506,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     if mat == 2:  # water: two travelling swells plus 1.6-3.7 m ripples (faded with distance) tilt the normal; sky by Fresnel, sun glint
         var t = cam[27]
         var rp = 0.03 * exp(-dm / 80)
+        var bz = n[2]  # the bed's normal, before the waves replace n
         n = unit(V3(0.05 * cos(t * 1.7 + u[0] * 2.1 + u[1] * 1.3) + rp * cos(t * 3.1 + hit[0] * 1.7 - hit[1] * 0.9) + 0.5 * rp * cos(t * 4.7 - hit[0] * 1.3 + hit[1] * 3.9),
                     0.05 * cos(t * 2.3 - u[0] * 0.9 + u[1] * 2.6) + rp * cos(t * 2.9 + hit[0] * 0.8 + hit[1] * 1.9) + 0.5 * rp * cos(t * 5.3 + hit[0] * 3.6 + hit[1] * 1.1), 1, 0))
         var r = view - n * (2 * dot(view, n))
@@ -514,6 +515,11 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
         var e = 200 / (1 + dm * 0.004)  # far water is rougher per pixel: a wider, dimmer glint instead of sparkle
         col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), e) * 3 * sqrt(e / 200) * (1 - cam[30]))
+        var dep = (T[1] - u[2]) * cam[16]  # metres of water over the bed: shallows lighter and greener, deep water darker, a thin foam line that breathes at the shore
+        col = col * (0.75 + 0.25 * exp(-dep / 8)) * (1 - 0.35 * exp(-dep / 2)) + V3(0.08, 0.3, 0.26, 0) * (0.35 * exp(-dep / 2) * sh)
+        var hd = dep * bz / max(sqrt(max(1 - bz * bz, Float32(0))), Float32(0.02))  # metres from the waterline along the bed: a thin line on any slope, none over a flat lake bed
+        var foam = min(max((0.9 + 0.4 * sin(cam[27] * 0.9 + hit[0] * 0.05 + hit[1] * 0.04) - hd) / 0.3, Float32(0)), Float32(1)) * min(max((0.3 - dep) / 0.1, Float32(0)), Float32(1)) * (0.55 + 0.45 * vnoise(hit[0] * 2, hit[1] * 2 + cam[27] * 0.6)) * (1 - min(dm / 300, Float32(1)))
+        col += V3(0.9, 0.92, 0.9, 0) * (foam * (0.25 + 0.75 * sh) * (1 - 0.8 * cam[30]))
     elif mat >= 10:  # a ground prop: 10 boulder (grey, speckled), 11 bush (leaf green, dry-tipped), 12 fallen log (bark)
         var q = vnoise(hit[0] * 4, hit[1] * 4) * (0.6 + 0.4 * vnoise(hit[2] * 6, hit[0] * 3))
         var base = V3(0.42, 0.4, 0.37, 0) * (0.7 + 0.5 * q) if mat == 10 else (V3(0.17, 0.27, 0.09, 0) * (0.8 + 0.5 * q) * V3(0.92 + 0.16 * h[6], 1, 1.08 - 0.16 * h[6], 0) if mat == 11 else V3(0.26, 0.19, 0.13, 0) * (0.75 + 0.5 * q))
@@ -556,6 +562,8 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var rock = min(max((0.8 - n[2]) * 4, Float32(0)), Float32(1)) * 0.6
         var tint = V3(1, 1, 1, 0) if hb == 0 else V3(0.88, 1.06, 0.9, 0) * (1 - dry) + V3(1.18, 1.04, 0.72, 0) * dry  # scree stays grey
         base = base * tint * (1 - rock) + V3(0.4, 0.39, 0.36, 0) * (grain * rock)
+        var wetg = min(max(1 - (u[2] - T[1]) * cam[16] / 3, Float32(0)), Float32(1))  # 0-3 m over the sea: wet sand, darker and a touch cooler, wettest at the line
+        base = base * (1 - 0.4 * wetg * wetg) * V3(1 - 0.08 * wetg, 1 - 0.02 * wetg, 1 + 0.04 * wetg, 0)
         col = light(cam, base * base, n, view, sh, ao * a[3], Float32(0.05) if hb == 0 else 0)  # wet-looking scree catches the sun
         if hb == 2:  # meadow grass: back-lit sheen when looking toward the sun
             col += base * base * (0.35 * pow(1 - abs(dot(n, view)), Float32(4)) * max(dot(view, s), Float32(0)) * sh * (1 - cam[30]))
