@@ -92,7 +92,12 @@ comptime REFL = Float32(0.2)  # floor reflectance (MuJoCo's grid material)
 comptime OGL = W * H if SHADOW == 2 else 0  # aux layers in sm, each W x H (raster is compiled for W x H): shadow map at 0,
 comptime OMR = OGL + (W * H if GLASS else 0)  # then the glass layer at OGL, the mirror layer at OMR
 comptime NAUX = OMR + (W * H if REFLECT else 0)
-comptime NSM = NAUX if NAUX > 0 else 1  # sm buffer size (uint64), what callers allocate
+comptime TAA = get_defined_int["TAA", 1]() if LIVING else 0  # 1: temporal AA; the half-res background shades one pixel per 2x2 quad per frame, in turn
+comptime OTA = NAUX  # TAA layers after the cleared ones: history (two RGBA8 frames per uint64, frame-parity ping-pong),
+comptime OMV = OTA + (W * H if TAA else 0)  # each quad's background one frame ago (x, y in 1/8 px, uint16 each, as uint32),
+comptime OTL = OMV + ((HW * HH + 1) // 2 if TAA else 0)  # float32 tail: last frame's camera, this camera, frame count, history ok
+comptime NTA = OTL + (NCAM + 2 if TAA else 0)
+comptime NSM = NTA if NTA > 0 else 1  # sm buffer size (uint64), what callers allocate
 comptime BLOB = Float32(get_defined_int["BLOB_UM", 1200]()) * 1e-3  # SHADOW=1 blob radius, mm
 comptime TVIS = TileTensor[DType.uint64, type_of(LVIS), MutAnyOrigin]
 comptime TIMG = TileTensor[DType.uint32, type_of(LVIS), MutAnyOrigin]
@@ -152,13 +157,27 @@ def vertex(pi: TPI, pf: TPF, rv: TRV, rt: TRT, pose: TPOSE, cam: TCAM, f: Int, p
 @always_inline
 def camera(cam: TCAM) -> Tuple[V3, V3, V3, V3, Float32]:
     """Eye, right, up, forward and focal length in pixels from cam = eye 3, target 3, fovy, ..."""
-    var eye = V3(cam[0], cam[1], cam[2], 0)
-    var fw = V3(cam[3], cam[4], cam[5], 0) - eye
+    return basis(V3(cam[0], cam[1], cam[2], 0), V3(cam[3], cam[4], cam[5], 0), cam[7])
+
+
+@always_inline
+def basis(eye: V3, target: V3, focal: Float32) -> Tuple[V3, V3, V3, V3, Float32]:
+    var fw = target - eye
     fw = fw / sqrt(dot(fw, fw))
     var right = cross(fw, V3(0, 0, 1, 0))
     right = right / sqrt(dot(right, right))
     var up = cross(right, fw)
-    return (eye, right, up, fw, cam[7])
+    return (eye, right, up, fw, focal)
+
+
+@always_inline
+def phase(sm: TVIS) -> Tuple[Int, Int, Int]:
+    """TAA: the frame count since the last cut and which pixel of each 2x2 quad the half-res background shades this
+    frame, cycling (0,0) (1,1) (0,1) (1,0); without TAA always (0,0)."""
+    comptime if TAA:
+        var f = Int(sm.ptr.unsafe_offset(OTL).bitcast[Float32]()[2 * NCAM])
+        return (f, f & 1, ((f >> 1) ^ f) & 1)
+    return (0, 0, 0)
 
 
 def clear(vis: TVIS):
@@ -789,8 +808,9 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
     var ray = c[3] * c[4] + c[1] * px - c[2] * py
     var key = vis[i]
     var gk = sm.ptr.unsafe_offset(OGL + i)[] if GLASS else EMPTY
-    comptime if LIVING:  # half-res: open-sky odd pixels come from upscale, so they skip the march
-        if key == EMPTY and gk == EMPTY and ((i % W) & 1 != 0 or (i // W) & 1 != 0):
+    var ph = phase(sm)
+    comptime if LIVING:  # half-res: background pixels off this frame's quad pixel come from upscale, so they skip the march
+        if key == EMPTY and gk == EMPTY and ((i % W) & 1 != ph[1] or (i // W) & 1 != ph[2]):
             img[i] = 0
             return
     var h = SIMD[DType.float32, 8](-1)  # LIVING: this pixel's one march, shared by every sample() below
@@ -855,7 +875,19 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
     var pixel = r | gg << 8 | b << 16 | (UInt32(255) if fly else UInt32(0)) << 24
     img[i] = pixel
     comptime if LIVING:
-        if ((i % W) & 1) == 0 and ((i // W) & 1) == 0:
+        if ((i % W) & 1) == ph[1] and ((i // W) & 1) == ph[2]:
+            comptime if TAA:  # where this quad's background was one frame ago, for upscale's history fetch
+                var t = sm.ptr.unsafe_offset(OTL).bitcast[Float32]()
+                var mv = UInt32(0xFFFFFFFF)
+                if t[2 * NCAM + 1] > 0:
+                    var pc = basis(V3(t[0], t[1], t[2], 0), V3(t[3], t[4], t[5], 0), t[7])
+                    var dv = ray if h[0] >= 3.4e38 else c[0] + ray * h[0] - pc[0]  # sky: the direction only
+                    var z = dot(dv, pc[3])
+                    var sx = Float32(W) * 0.5 - 0.5 + pc[4] * dot(dv, pc[1]) / z
+                    var sy = Float32(H) * 0.5 - 0.5 - pc[4] * dot(dv, pc[2]) / z
+                    if z > 0 and sx >= 0 and sy >= 0 and sx < Float32(W - 1) and sy < Float32(H - 1):
+                        mv = UInt32(sx * 8) | UInt32(sy * 8) << 16
+                sm.ptr.unsafe_offset(OMV).bitcast[UInt32]()[(i // W // 2) * HW + (i % W // 2)] = mv
             if key == EMPTY and not glass:  # alpha 255 marks open sky for glow's shaft march
                 low[(i // W // 2) * HW + (i % W // 2)] = (pixel & 0xFFFFFF) | (UInt32(255) << 24 if g[0] >= 3.4e38 else UInt32(0))
             else:
@@ -917,6 +949,37 @@ def post(p: UInt32, cam: TCAM, x: Int, y: Int) -> UInt32:
     return out
 
 
+@always_inline
+def resolve(sm: TVIS, a: UInt32, b: UInt32, c: UInt32, d: UInt32, cur: UInt32, x: Int, y: Int, ph: Tuple[Int, Int, Int]) -> UInt32:
+    """TAA: last frame's colour where this pixel was (bilinear in the history), clamped to the 2x2 low quad around it,
+    blended in: this frame weighs 1/4 on the freshly shaded quad pixel, 1/10 on the three interpolated ones. No history
+    after a cut or off screen."""
+    var m = sm.ptr.unsafe_offset(OMV).bitcast[UInt32]()[(y // 2) * HW + x // 2]
+    if sm.ptr.unsafe_offset(OTL).bitcast[Float32]()[2 * NCAM + 1] == 0 or m == 0xFFFFFFFF:
+        return cur
+    var hx = Float32(m & 0xFFFF) / 8 + Float32(x - (x & ~1) - ph[1])  # the quad pixel's spot plus this pixel's offset from it
+    var hy = Float32(m >> 16) / 8 + Float32(y - (y & ~1) - ph[2])
+    if hx < 0 or hy < 0 or hx > Float32(W - 1) or hy > Float32(H - 1):
+        return cur
+    var hp = sm.ptr.unsafe_offset(OTA).bitcast[UInt32]()
+    var par = 1 - (ph[0] & 1)
+    var ix = min(Int(hx), W - 2)
+    var iy = min(Int(hy), H - 2)
+    var tx = hx - Float32(ix)
+    var ty = hy - Float32(iy)
+    var w = Float32(0.25) if (x & 1) == ph[1] and (y & 1) == ph[2] else Float32(0.1)
+    var out = UInt32(0)
+    for k in range(3):
+        var sh = UInt32(8 * k)
+        var h0 = Float32((hp[2 * (iy * W + ix) + par] >> sh) & 255) * (1 - tx) + Float32((hp[2 * (iy * W + ix + 1) + par] >> sh) & 255) * tx
+        var h1 = Float32((hp[2 * (iy * W + W + ix) + par] >> sh) & 255) * (1 - tx) + Float32((hp[2 * (iy * W + W + ix + 1) + par] >> sh) & 255) * tx
+        var lo = Float32(min(min((a >> sh) & 255, (b >> sh) & 255), min((c >> sh) & 255, (d >> sh) & 255)))
+        var hi = Float32(max(max((a >> sh) & 255, (b >> sh) & 255), max((c >> sh) & 255, (d >> sh) & 255)))
+        var hv = min(max(h0 * (1 - ty) + h1 * ty, lo), hi)
+        out |= UInt32(hv + (Float32((cur >> sh) & 255) - hv) * w + 0.5) << sh
+    return out
+
+
 def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, cam: TCAM):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= W * H:
@@ -928,15 +991,16 @@ def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, cam: TCAM):
         comptime if GLASS:
             if sm.ptr.unsafe_offset(OGL + i)[] != EMPTY:
                 bgpx = False
-        if bgpx:
-            var fx = Float32(x) * 0.5
-            var fy = Float32(y) * 0.5
-            var x0 = min(Int(floor(fx)), HW - 1)
-            var y0 = min(Int(floor(fy)), HH - 1)
+        var ph = phase(sm)
+        if bgpx:  # bilinear over this frame's quad pixels (low), then (TAA) the history blend
+            var fx = Float32(x - ph[1]) * 0.5
+            var fy = Float32(y - ph[2]) * 0.5
+            var x0 = min(max(Int(floor(fx)), 0), HW - 1)
+            var y0 = min(max(Int(floor(fy)), 0), HH - 1)
             var x1 = min(x0 + 1, HW - 1)
             var y1 = min(y0 + 1, HH - 1)
-            var tx = fx - Float32(x0)
-            var ty = fy - Float32(y0)
+            var tx = min(max(fx - Float32(x0), Float32(0)), Float32(1))
+            var ty = min(max(fy - Float32(y0), Float32(0)), Float32(1))
             var a = low[y0 * HW + x0]
             var b = low[y0 * HW + x1]
             var c = low[y1 * HW + x0]
@@ -948,15 +1012,30 @@ def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, cam: TCAM):
                 var cv = Float32((c >> shift) & 255) * (1 - tx) + Float32((d >> shift) & 255) * tx
                 var value = UInt32(av * (1 - ty) + cv * ty)
                 out |= value << shift
+            comptime if TAA:
+                out = resolve(sm, a, b, c, d, out, x, y, ph)
             img[i] = out
+        comptime if TAA:  # this frame before glow and grain is next frame's history
+            sm.ptr.unsafe_offset(OTA).bitcast[UInt32]()[2 * i + (ph[0] & 1)] = img[i]
         glow(img, low, cam, i, x, y)
         img[i] = post(img[i], cam, x, y)
 
 
-def clear_sm(sm: TVIS):
+def clear_sm(sm: TVIS, cam: TCAM):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i < NSM:
+    if i < NAUX:
         sm[i] = EMPTY
+    comptime if TAA:
+        if i == 0:  # once per frame, before any reader: roll the camera, count frames, no history after a cut (eye > 5 m, sun moved)
+            var t = sm.ptr.unsafe_offset(OTL).bitcast[Float32]()
+            var d = V3(cam[0] - t[NCAM], cam[1] - t[NCAM + 1], cam[2] - t[NCAM + 2], 0)
+            var s = V3(cam[17] - t[NCAM + 17], cam[18] - t[NCAM + 18], cam[19] - t[NCAM + 19], 0)
+            var ok = dot(d, d) < 25 and dot(s, s) < 1e-4
+            for k in range(NCAM):
+                t[k] = t[NCAM + k]
+                t[NCAM + k] = cam[k]
+            t[2 * NCAM] = t[2 * NCAM] + 1 if ok else Float32(0)
+            t[2 * NCAM + 1] = Float32(1) if ok else Float32(0)
 
 
 def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clear]()), kr: type_of(DeviceContext(0).compile_function[raster]()),
@@ -967,7 +1046,7 @@ def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clea
     see-through layer, (REFLECT) the mirror layer; shade."""
     var g = (F * NTRI + 255) // 256
     comptime if NAUX > 0:
-        ctx.enqueue_function(kcs, sm, grid_dim=(NSM + 255) // 256, block_dim=256)
+        ctx.enqueue_function(kcs, sm, tcam, grid_dim=(NAUX + 255) // 256, block_dim=256)
     comptime if SHADOW == 2:
         ctx.enqueue_function(ksc, tcam, tscam, grid_dim=1, block_dim=1)
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tscam, Int32(0), Int32(0), grid_dim=g, block_dim=256)
