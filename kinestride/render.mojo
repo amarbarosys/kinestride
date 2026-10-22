@@ -644,7 +644,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         if dm < 100:
             rb = min(max((0.85 - trail_d(T, u[0], u[1]) * cam[16]) / 0.4, Float32(0)), Float32(1))
             tr = max(tr, rb * rb * (3 - 2 * rb) * 0.95 * min(max((100 - dm) / 40, Float32(0)), Float32(1)))
-        base = base * (1 - tr) + V3(0.5, 0.42, 0.3, 0) * (grain * tr)
+        base = base * (1 - tr) + V3(0.80, 0.70, 0.52, 0) * (grain * tr)  # pale dry earth: the old (0.5, 0.42, 0.3) was the heath's brown, and a trail read as heath from the air
         var gw = lw_grass(T, u[0], u[1]) if dm < 30 else V3(0, 0, 0, 0)  # meadow and heather share here, bilinear over the nodes: the grass fades across habitat edges
         if gw[0] + gw[1] > 0.01 and n[2] > 0.5:  # blades: 7 shells over the ground within 30 m, thinned out by 18-30 m, each shell on its own turned, offset hash grid (about 6 cm)
             var cover = min((30 - dm) / 12, Float32(1)) * (1 - rb) * (1 - wetg) * min((gw[0] + gw[1]) * 1.3, Float32(1))
