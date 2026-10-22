@@ -866,6 +866,25 @@ def glow(img: TIMG, low: TLOW, cam: TCAM, i: Int, x: Int, y: Int):
     img[i] = out
 
 
+@always_inline
+def post(p: UInt32, cam: TCAM, x: Int, y: Int) -> UInt32:
+    """Display-space finish (LIVING): mild S-curve, split tone (cool shadows, warm highlights), +10% saturation, a soft
+    vignette, monochrome film grain that changes every frame (triangular, +-2.5/255: it also dithers away banding)."""
+    var v = V3(Float32(p & 255), Float32((p >> 8) & 255), Float32((p >> 16) & 255), 0) / 255
+    v = v * 0.75 + v * v * (3 - 2 * v) * 0.25
+    v += (1 - v) * (1 - v) * V3(-0.012, 0, 0.018, 0) + v * v * V3(0.02, 0.005, -0.025, 0)
+    var l = 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]
+    var dx = (Float32(x) - Float32(W) * 0.5) / Float32(W)
+    var dy = (Float32(y) - Float32(H) * 0.5) / Float32(W)
+    var fr = Int(cam[27] * 60)
+    var g = (hash2(x + fr * 7919, y) + hash2(x, y + fr * 104729) - 1) * Float32(2.5 / 255)
+    v = (V3(l, l, l, 0) + (v - l) * 1.1) * (1 - 0.45 * (dx * dx + dy * dy)) + g
+    var out = p & 0xFF000000
+    for k in range(3):
+        out |= UInt32(min(max(v[k] * 255 + 0.5, Float32(0)), Float32(255))) << UInt32(8 * k)
+    return out
+
+
 def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, cam: TCAM):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= W * H:
@@ -877,30 +896,29 @@ def upscale(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, cam: TCAM):
         comptime if GLASS:
             if sm.ptr.unsafe_offset(OGL + i)[] != EMPTY:
                 bgpx = False
-        if not bgpx:
-            glow(img, low, cam, i, x, y)
-            return
-        var fx = Float32(x) * 0.5
-        var fy = Float32(y) * 0.5
-        var x0 = min(Int(floor(fx)), HW - 1)
-        var y0 = min(Int(floor(fy)), HH - 1)
-        var x1 = min(x0 + 1, HW - 1)
-        var y1 = min(y0 + 1, HH - 1)
-        var tx = fx - Float32(x0)
-        var ty = fy - Float32(y0)
-        var a = low[y0 * HW + x0]
-        var b = low[y0 * HW + x1]
-        var c = low[y1 * HW + x0]
-        var d = low[y1 * HW + x1]
-        var out = UInt32(0)
-        for k in range(3):
-            var shift = UInt32(8 * k)
-            var av = Float32((a >> shift) & 255) * (1 - tx) + Float32((b >> shift) & 255) * tx
-            var cv = Float32((c >> shift) & 255) * (1 - tx) + Float32((d >> shift) & 255) * tx
-            var value = UInt32(av * (1 - ty) + cv * ty)
-            out |= value << shift
-        img[i] = out
+        if bgpx:
+            var fx = Float32(x) * 0.5
+            var fy = Float32(y) * 0.5
+            var x0 = min(Int(floor(fx)), HW - 1)
+            var y0 = min(Int(floor(fy)), HH - 1)
+            var x1 = min(x0 + 1, HW - 1)
+            var y1 = min(y0 + 1, HH - 1)
+            var tx = fx - Float32(x0)
+            var ty = fy - Float32(y0)
+            var a = low[y0 * HW + x0]
+            var b = low[y0 * HW + x1]
+            var c = low[y1 * HW + x0]
+            var d = low[y1 * HW + x1]
+            var out = UInt32(0)
+            for k in range(3):
+                var shift = UInt32(8 * k)
+                var av = Float32((a >> shift) & 255) * (1 - tx) + Float32((b >> shift) & 255) * tx
+                var cv = Float32((c >> shift) & 255) * (1 - tx) + Float32((d >> shift) & 255) * tx
+                var value = UInt32(av * (1 - ty) + cv * ty)
+                out |= value << shift
+            img[i] = out
         glow(img, low, cam, i, x, y)
+        img[i] = post(img[i], cam, x, y)
 
 
 def clear_sm(sm: TVIS):
