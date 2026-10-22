@@ -944,10 +944,10 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
     return sky(view)
 
 
-def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM):
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= W * H:
-        return
+comptime SHT = ((HW + 15) // 16) * ((HH + 15) // 16) * 256  # LIVING shade: threads for the quads' marching pixels, whole 16 x 16 tiles
+
+
+def shade_px(i: Int, vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM):
     var c = camera(cam)
     var px = Float32(i % W) + 0.5 - Float32(W) * 0.5
     var py = Float32(i // W) + 0.5 - Float32(H) * 0.5
@@ -1035,6 +1035,30 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
             else:
                 var bg = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, EMPTY, Float32(3.4e38), 1, EMPTY, h)
                 low[(i // W // 2) * HW + (i % W // 2)] = UInt32(min(sqrt(max(agx(bg[0]), 0)), 1) * 255) | UInt32(min(sqrt(max(agx(bg[1]), 0)), 1) * 255) << 8 | UInt32(min(sqrt(max(agx(bg[2]), 0)), 1) * 255) << 16
+
+
+def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM):
+    """LIVING: the first HW * HH threads are the quads' marching pixels, in 8 x 4 tiles per wave so neighbouring rays march alike
+    (a thread per pixel left every other lane of a marching row, and the whole odd rows, idle); the rest are one per pixel for
+    everything else, and background there returns at once. Otherwise one thread per pixel."""
+    var t = Int(block_idx.x * block_dim.x + thread_idx.x)
+    comptime if LIVING:
+        if t < SHT:
+            var ph = phase(sm)
+            var tile = t // 256  # 16 x 16 quads, a wave of 32 threads 8 x 4 of them
+            var l = t % 256
+            var nx = (HW + 15) // 16
+            var qx = tile % nx * 16 + (l // 32 % 2) * 8 + l % 8
+            var qy = tile // nx * 16 + (l // 64) * 4 + l % 32 // 8
+            if qx < HW and qy < HH and qx * 2 + ph[1] < W and qy * 2 + ph[2] < H:
+                shade_px((qy * 2 + ph[2]) * W + qx * 2 + ph[1], vis, sm, img, low, pi, pf, rv, rt, rp, pose, cam)
+            return
+        t -= SHT
+        if t < W * H and ((t % W) & 1 != phase(sm)[1] or (t // W) & 1 != phase(sm)[2]):
+            shade_px(t, vis, sm, img, low, pi, pf, rv, rt, rp, pose, cam)
+    else:
+        if t < W * H:
+            shade_px(t, vis, sm, img, low, pi, pf, rv, rt, rp, pose, cam)
 
 
 @always_inline
@@ -1239,7 +1263,7 @@ def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clea
     comptime if REFLECT:
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), Int32(0), grid_dim=g, block_dim=256)
         lap(ctx, pr, P_GLASS)
-    ctx.enqueue_function(ks, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
+    ctx.enqueue_function(ks, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(SHT + W * H + 255) // 256 if LIVING else (W * H + 255) // 256, block_dim=256)
     lap(ctx, pr, P_SHADE)
     comptime if LIVING:
         ctx.enqueue_function(ku, vis, sm, img, low, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
