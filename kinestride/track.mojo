@@ -25,7 +25,7 @@ from std.time import perf_counter_ns
 from layout import TileTensor
 from max.gpu.host import DeviceContext
 
-from smooth import BLOCK, EQACT, F, GRID, K, LF, LI, LO, LQ, LU, LV, NB, NCP, NEQ, NFL, NI, NMOCAP, NQ, NROW, NSLOT, NU, NUC, NV, NXF, OVALID, load, smooth
+from smooth import BLOCK, EQACT, F, GRID, HTAB, K, LF, LI, LO, LQ, LU, LV, NB, NCP, NEQ, NFLT, NI, NMOCAP, NQ, NROW, NSLOT, NU, NUC, NV, NXF, OVALID, load, smooth
 
 
 def words(path: String) raises -> List[UInt8]:
@@ -38,7 +38,7 @@ def put(mut fh: FileHandle, p: Pointer[Float32, _], n: Int) raises:
 
 def main() raises:
     comptime assert NMOCAP == 1 and NXF == 1 and EQACT == 1 and NEQ == 1, "one assist mocap body, one push slot, its weld switchable"
-    comptime assert NSLOT == 3 * NCP, "every pair is plane-mesh: 3 contact slots each"
+    comptime assert HTAB or NSLOT == 3 * NCP, "every pair is plane-mesh: 3 contact slots each (HTAB: pooled heightfield slots, foot flags not read)"
     comptime assert NU == NQ - 7, "a servo on every hinge"
     var dir = String(argv()[1])
     var rb = words(dir + "ref.bin")
@@ -63,14 +63,14 @@ def main() raises:
         print("compiled", dir)
         return
     var mi_b = ctx.enqueue_create_buffer[DType.int32](NI)
-    var mf_b = ctx.enqueue_create_buffer[DType.float32](NFL)
+    var mf_b = ctx.enqueue_create_buffer[DType.float32](NFLT)
     var q_b = ctx.enqueue_create_buffer[DType.float32](NQ * F)
     var v_b = ctx.enqueue_create_buffer[DType.float32](NV * F)
     var u_b = ctx.enqueue_create_buffer[DType.float32](NUC * F)
     var o_b = ctx.enqueue_create_buffer[DType.float32](NROW * F)
     o_b.enqueue_fill(0)
     var mi = load(dir + "mi.bin", NI)
-    var mf = load(dir + "mf.bin", NFL)
+    var mf = load(dir + "mf.bin", NFLT)
     var qp = load(dir + "qpos.bin", NQ * F)
     var qv = load(dir + "qvel.bin", NV * F)
     ctx.enqueue_copy(mi_b, mi.unsafe_ptr().unsafe_bitcast[Int32]())
@@ -129,7 +129,7 @@ def main() raises:
         ctx.synchronize()
         for i in range(nf * F):
             con[i] = 0
-        for pr in range(NCP):
+        for pr in range(0 if HTAB else NCP):
             if footpair[pr] >= 0:
                 for sl in range(3):
                     for a in range(F):
