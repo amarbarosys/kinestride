@@ -205,3 +205,5 @@ vignette, grain) at the end of `upscale`, bounce from the surface's albedo in `l
 position to the `OMV` layer; `upscale` calls `resolve()` (history in `OTA`, two RGBA8 frames per uint64, parity
 ping-pong; clamp to the low quad; weight 1/4 on the fresh pixel, 1/10 on the rest); `clear_sm` (now takes `cam`) rolls
 the camera tail at `OTL` once per frame and zeroes the frame count on a cut. Walk gate 3.79 -> 3.83 ms, sm +8.29 MB.
+
+Perf split (2026-10-22): `cell` and `slot` wrap grid indices with a mask (N and TN are powers of two), not two integer modulos per read: the GPU has no integer divide, and the walk gate went 3.79 -> 1.58 ms with images unchanged (ppm_gate 0 of 57600 in noon, dusk, night; 0 bytes differ in the 7 review frames).

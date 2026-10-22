@@ -4,7 +4,7 @@ read from one float32 table, so the renderer and the walker evaluate the same su
 Table: header [N, sea, C, TN]; 5 floats per terrain cell k = j N + i (height | rgb + ao bytes | horizon azimuths 0-3 |
 4-7 | habitat); then a TN x TN grid of tree slots (species + 1, height / 40 m x 255, x and y in the slot x 255). Lengths are in
 terrain cells of C metres (render.mojo cam[16] = C), so x, y and z share one factor. Positions are unwrapped; indices
-wrap (a torus).
+wrap (a torus) with a mask: N and TN are powers of two (an integer modulo by a runtime value took 2.3 ms of the frame).
 
 Surface: each terrain cell is two triangles split on its (0, 0)-(1, 1) diagonal, the web renderer's split, so lw_height
 is the exact surface lw_hit draws. Within NEAR_M the ray walks the tree grid (5 m), testing the parent terrain cell's
@@ -28,13 +28,13 @@ comptime CROWN = SIMD[DType.float32, 8](0.085, 0.25, 0.6, 0.13, 0.2, 0.22, 0, 0)
 @always_inline
 def cell(T: Pointer[Float32, _], i: Int, j: Int, c: Int) -> Float32:
     var n = Int(T[0])
-    return T[HDR + 5 * (((j % n) + n) % n * n + ((i % n) + n) % n) + c]
+    return T[HDR + 5 * ((j & (n - 1)) * n + (i & (n - 1))) + c]  # the mask wraps negatives too
 
 
 @always_inline
 def slot(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
     var tn = Int(T[3])
-    return T[Int(T[6]) + ((j % tn) + tn) % tn * tn + ((i % tn) + tn) % tn]
+    return T[Int(T[6]) + (j & (tn - 1)) * tn + (i & (tn - 1))]
 
 
 @always_inline
