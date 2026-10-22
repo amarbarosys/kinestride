@@ -1180,27 +1180,70 @@ def clear_sm(sm: TVIS, cam: TCAM):
             t[2 * NCAM + 1] = Float32(1) if ok else Float32(0)
 
 
+comptime P_CLEAR_SM = 0  # slots of the caller's profile table (frame's `pr`): milliseconds per pass, then the counters
+comptime P_SUNCAM = 1
+comptime P_SHADOW = 2  # raster from the sun into the shadow map
+comptime P_CLEAR = 3
+comptime P_RASTER = 4  # raster from the view camera
+comptime P_GLASS = 5  # glass and mirror layers
+comptime P_SHADE = 6  # the half-res march + shading
+comptime P_UPSCALE = 7  # the quad resolve + TAA
+comptime LAUNCH = 8  # GPU launches counted (kernels, and the caller's copies)
+comptime LAST = 9  # time of the previous lap, ns
+comptime P_COPY = 10  # the walk's own steps: device-to-host copy and its wait, window upload + present, fifo write
+comptime P_PRESENT = 11
+comptime P_FIFO = 12
+comptime NPROF = 16
+comptime PROF = get_defined_int["PROF", 0]()  # 1: frame() waits after every pass and adds its milliseconds to the caller's table
+
+
+def lap(ctx: DeviceContext, pr: Int, k: Int) raises:
+    """Count one launch in slot LAUNCH of the caller's Float64 table (address pr, 0 = none); with PROF add the pass's
+    milliseconds since the previous lap to slot k (the wait serialises the passes: the split, not the overlapped total)."""
+    if pr == 0:
+        return
+    var t = UnsafePointer[Float64, MutAnyOrigin](unsafe_from_address=pr)
+    t[LAUNCH] += 1
+    comptime if PROF > 0:
+        ctx.synchronize()
+        var now = Float64(perf_counter_ns())
+        t[k] += (now - t[LAST]) / 1e6
+        t[LAST] = now
+
+
 def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clear]()), kr: type_of(DeviceContext(0).compile_function[raster]()),
           ks: type_of(DeviceContext(0).compile_function[shade]()), ku: type_of(DeviceContext(0).compile_function[upscale]()), ksc: type_of(DeviceContext(0).compile_function[suncam]()),
           kcs: type_of(DeviceContext(0).compile_function[clear_sm]()), vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, tpi: TPI, tpf: TPF, trv: TRV, trt: TRT,
-          trp: TRP, tpose: TPOSE, tcam: TCAM, tscam: TCAM) raises:
+          trp: TRP, tpose: TPOSE, tcam: TCAM, tscam: TCAM, pr: Int = 0) raises:
     """One frame's passes on the card: aux layers cleared, (SHADOW=2) sun camera + shadow map, view raster, (GLASS) the
     see-through layer, (REFLECT) the mirror layer; shade."""
     var g = (F * NTRI + NBIRD * NTB + 255) // 256  # + the flock's triangles, drawn by the view raster
+    comptime if PROF > 0:
+        if pr != 0:
+            UnsafePointer[Float64, MutAnyOrigin](unsafe_from_address=pr)[LAST] = Float64(perf_counter_ns())
     comptime if NAUX > 0:
         ctx.enqueue_function(kcs, sm, tcam, grid_dim=(NAUX + 255) // 256, block_dim=256)
+        lap(ctx, pr, P_CLEAR_SM)
     comptime if SHADOW == 2:
         ctx.enqueue_function(ksc, tcam, tscam, grid_dim=1, block_dim=1)
+        lap(ctx, pr, P_SUNCAM)
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tscam, Int32(0), Int32(0), Int32(0), grid_dim=g, block_dim=256)
+        lap(ctx, pr, P_SHADOW)
     ctx.enqueue_function(kc, vis, grid_dim=(W * H + 255) // 256, block_dim=256)
+    lap(ctx, pr, P_CLEAR)
     ctx.enqueue_function(kr, vis, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(0), Int32(0), Int32(1), grid_dim=g, block_dim=256)
+    lap(ctx, pr, P_RASTER)
     comptime if GLASS:
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OGL), Int32(1), Int32(0), grid_dim=g, block_dim=256)
+        lap(ctx, pr, P_GLASS)
     comptime if REFLECT:
         ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), Int32(0), grid_dim=g, block_dim=256)
+        lap(ctx, pr, P_GLASS)
     ctx.enqueue_function(ks, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
+    lap(ctx, pr, P_SHADE)
     comptime if LIVING:
         ctx.enqueue_function(ku, vis, sm, img, low, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
+        lap(ctx, pr, P_UPSCALE)
 
 
 def stream(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clear]()), kr: type_of(DeviceContext(0).compile_function[raster]()),
