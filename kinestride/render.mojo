@@ -217,17 +217,21 @@ def fill(vis: TVIS, base: Int32, id: UInt64, sx: V3, sy: V3, sz: V3):
             _ = Atomic.min[ordering=Ordering.RELAXED](vis.ptr.unsafe_offset(Int(base) + y * W + x), key)
 
 
+comptime BANK_S = Float32(-0.479)  # a gull rolls 0.5 rad, the outer wing (+x, the flock circles counter-clockwise) down: a walker under the circle looks up along the wing axis, and the roll turns the wings' underside to it instead of their edge
+comptime BANK_C = Float32(0.878)
+
+
 @always_inline
 def bird_vertex(pf: TPF, cam: TCAM, b: Int, k: Int) -> V3:
     """World position (m) of outline point k of gull b. The host writes each gull's state (centre, heading,
-    flap) into cam every frame and the outline into pf once; the wings lift with |x| times the flap, as the page's gulls."""
+    flap) into cam every frame and the outline into pf once; the wings lift with |x| times the flap, as the page's gulls, and the body rolls by BANK."""
     var s = CAMB + 8 * b
     var o = BIRD0 + 2 * k
     var x = pf[o]
     var y = pf[o + 1]
     var fx = cam[s + 3]
     var fy = cam[s + 4]
-    return V3(cam[s] + x * fy + y * fx, cam[s + 1] - x * fx + y * fy, cam[s + 2] + abs(x) * 0.55 * cam[s + 5], 0)
+    return V3(cam[s] + x * BANK_C * fy + y * fx, cam[s + 1] - x * BANK_C * fx + y * fy, cam[s + 2] + x * BANK_S + abs(x) * 0.55 * cam[s + 5], 0)
 
 
 comptime BIRDF = UInt64((1 << (32 - TB)) - 2)  # the animal field of a gull's key: no animal and not EMPTY's all ones; the triangle field holds gull * NTB + triangle
