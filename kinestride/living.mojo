@@ -175,6 +175,21 @@ def trail_d(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
 
 
 @always_inline
+def lw_grass(T: Pointer[Float32, _], x: Float32, y: Float32) -> F4:
+    """(meadow, heather) share of the four nodes around (x, y), bilinear: the grass fades across a habitat edge instead of stopping on it."""
+    var i = Int(floor(x))
+    var j = Int(floor(y))
+    var fx = x - Float32(i)
+    var fy = y - Float32(j)
+    var out = F4(0)
+    for k in range(4):
+        var hb = Int(cell(T, i + (k & 1), j + (k >> 1), 4))
+        var w = (fx if k & 1 else 1 - fx) * (fy if k >> 1 else 1 - fy)
+        out += F4(w if hb == 2 else 0, w if hb == 4 else 0, 0, 0)
+    return out
+
+
+@always_inline
 def trail_xy(T: Pointer[Float32, _], v: Int) -> F4:
     """Vertex v (counted over all polylines in the tail) as (x, y, polylines, vertices) in terrain cells."""
     var n = Int(T[0])
@@ -503,7 +518,6 @@ def lw_ctrl(world: List[Float32]) -> List[Float32]:
         for v in range(voff, voff + Int(T[tail + 1 + p]) - 1):
             segs.append(v)
         voff += Int(T[tail + 1 + p])
-    var cnt = List[Int](length=n * n + 1, fill=0)
     var own = List[List[Int]]()
     for _ in range(n * n):
         own.append(List[Int]())
