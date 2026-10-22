@@ -36,7 +36,7 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
 from city import city_hit
-from living import cell, lw_albedo, lw_grass, lw_hit, lw_lit, lw_trail, rnd, sky_cam, trail_d
+from living import atan2_gpu, cell, lw_albedo, lw_aurora, lw_grass, lw_hit, lw_lit, lw_trail, rnd, sky_cam, trail_d
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -471,8 +471,8 @@ def cloud(cam: TCAM, x: Float32, y: Float32) -> Float32:
 
 
 @always_inline
-def living_sky(cam: TCAM, view: V3) -> V3:
-    """Analytic atmosphere, sun disc and halo, stars at night, the cloud layer over them (linear)."""
+def living_sky(cam: TCAM, pf: TPF, view: V3) -> V3:
+    """Analytic atmosphere, sun disc and halo, stars and the aurora at night, the cloud layer over them (linear)."""
     var c = atmosphere(cam, view)
     if cam[30] < 0.5:
         var r = (1 - dot(view, sun(cam))) / 1.6e-4  # ~1 deg disc
@@ -481,6 +481,11 @@ def living_sky(cam: TCAM, view: V3) -> V3:
         var q = hash2(Int(floor(view[0] * 400)) * 7919 + Int(floor(view[1] * 400)), Int(floor(view[2] * 400)))
         if q > 0.9985:
             c += V3(0.8, 0.8, 0.9, 0) * cam[30]
+    if cam[30] > 0.4 and view[2] > 0.05 and view[2] < 0.78:  # the loops hang between 0.08 and 0.68 rad up
+        var az = atan2_gpu(view[1], view[0])
+        var a = lw_aurora(pf.ptr.unsafe_offset(LWO), az + (Float32(6.2831853) if az < 0 else Float32(0)),
+                          atan2_gpu(view[2], sqrt(view[0] * view[0] + view[1] * view[1])), cam[27])
+        c += V3(a[0], a[1], a[2], 0) * (min((cam[30] - 0.4) / 0.6, Float32(1)) * 0.35)
     if view[2] > 0.02:  # 1.5 km up: the same field that shades the ground, thinning into the haze
         var t = (1500 - cam[2]) / view[2]
         var cc = cloud(cam, cam[0] + view[0] * t, cam[1] + view[1] * t) * exp(-t / 40000)
@@ -517,7 +522,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var r = view - n * (2 * dot(view, n))
         var fr = 0.02 + 0.98 * pow(1 - max(-dot(n, view), Float32(0)), Float32(5))
         var a = lw_albedo(T, u[0], u[1])
-        col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
+        col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, pf, r) * fr
         var e = 200 / (1 + dm * 0.004)  # far water is rougher per pixel: a wider, dimmer glint instead of sparkle
         col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), e) * 3 * sqrt(e / 200) * (1 - cam[30]))
         var dep = (T[1] - u[2]) * cam[16]  # metres of water over the bed: shallows lighter and greener, deep water darker, a thin foam line that breathes at the shore
@@ -818,7 +823,7 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
         var h = h0 if h0[0] >= 0 else living(cam, pf, eye, ray)
         if key != EMPTY and tt < h[0]:
             return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False) * cam[26]
-        return meadow(sm, pf, cam, eye, ray, h, ao) if h[0] < 3.4e38 else living_sky(cam, unit(ray)) * cam[26]
+        return meadow(sm, pf, cam, eye, ray, h, ao) if h[0] < 3.4e38 else living_sky(cam, pf, unit(ray)) * cam[26]
     comptime if CITY:
         var h = city(cam, eye, ray)
         if key != EMPTY and tt < h[0]:

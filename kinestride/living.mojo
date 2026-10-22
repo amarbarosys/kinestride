@@ -6,6 +6,9 @@ Table: header [N, sea, C, TN]; 5 floats per terrain cell k = j N + i (height | r
 terrain cells of C metres (render.mojo cam[16] = C), so x, y and z share one factor. Positions are unwrapped; indices
 wrap (a torus) with a mask: N and TN are powers of two (an integer modulo by a runtime value took 2.3 ms of the frame).
 
+Between the tree slots and the tail sit the aurora loops (tools/export_bin.mjs: segments of the CLE4 double-dimer loops, binned by azimuth),
+read by lw_aurora.
+
 The file ends with a tail (header word 7 = its offset, tools/export_bin.mjs): the trails, P polylines (word 0 = P, then each one's
 vertex count, then the vertices, one word each: x | y << 16 as uint16 at N / 65536 cells, wrapping). The habitat word holds the trail
 level in its fraction (habitat + level / 256), and the ground colour is without the trail tint.
@@ -23,7 +26,7 @@ triangles over each step and the cones of the 5 x 5 slots around it; beyond, it 
 alder, pine).
 """
 from std.sys import get_defined_int
-from std.math import asin, atan2, cos, exp, floor, pi, sin, sqrt
+from std.math import asin, atan2, cos, exp, floor, pi, pow, sin, sqrt
 from std.memory import bitcast
 
 comptime F4 = SIMD[DType.float32, 4]
@@ -770,3 +773,58 @@ def sky_cam(mut c: List[Float32], t: Float32, m: Float32):
     c[29] = (atan2(g * sy, g * sx) / (2 * pi) * 8 + 8) % 8
     c[30] = 1 - day
     c[31] = dusk
+
+
+@always_inline
+def atan2_gpu(y: Float32, x: Float32) -> Float32:
+    """atan2 for the kernels (the device library has no atan2f): the 9th-degree minimax atan on [0, 1], error under 1e-5 rad."""
+    var ax = abs(x)
+    var ay = abs(y)
+    var lo = min(ax, ay)
+    var hi = max(ax, ay)
+    var q = lo / max(hi, Float32(1e-30))
+    var q2 = q * q
+    var r = q * (0.9998660 + q2 * (-0.3302995 + q2 * (0.1801410 + q2 * (-0.0851330 + q2 * 0.0208351))))
+    if ay > ax:
+        r = Float32(1.5707963) - r
+    if x < 0:
+        r = Float32(3.1415927) - r
+    return -r if y < 0 else r
+
+
+@always_inline
+def lw_aurora(T: Pointer[Float32, _], az: Float32, el: Float32, t: Float32) -> F4:
+    """Colour (linear, before the night gain) of the CLE4 aurora in the sky direction (az, el) rad at time t (s). Each loop edge hangs as a
+    curtain (the web page's sky pass, world.mjs): its two sample points are hems at height 0.1 + 0.32 v rad, swaying with t, and from each a
+    ray rises 0.22 rad, leaning, fading in over its first tenth and out after; a pixel sums the rays of the edges in its azimuth bin."""
+    var tn = Int(T[3])
+    var b = Int(T[6]) + tn * tn
+    var nseg = Int(T[b])
+    var nl = T[b + 1]
+    var nb = Int(T[b + 2])
+    var segs = b + 4
+    var offs = segs + 6 * nseg
+    var ids = offs + nb + 1
+    var tau = Float32(2 * pi)
+    var bin = Int(az * (Float32(nb) / tau)) % nb
+    var sum = F4(0)
+    for e in range(Int(T[offs + bin]), Int(T[offs + bin + 1])):
+        var s = segs + 6 * Int(T[ids + e])
+        var li = T[s + 4]
+        var hue = li / nl
+        for sub in range(2):
+            var f = Float32(sub) * 0.5
+            var u = T[s] + (T[s + 2] - T[s]) * f
+            var v = T[s + 1] + (T[s + 3] - T[s + 1]) * f
+            var h = (el - (0.1 + 0.32 * v + 0.02 * sin(t * 0.9 + u * 14))) / 0.24
+            if h < 0 or h >= 0.92:
+                continue
+            var d = az - (u * tau + 0.05 * sin(t * 0.4 + v * 9 + li) + 0.12 * h * sin(t * 0.5 + li))
+            d -= tau * floor(d / tau + 0.5)
+            var w = exp(-d * d / 1.0e-4)
+            if w < 0.01:
+                continue
+            var pulse = 0.55 + 0.45 * sin(t * 1.1 + (T[s + 5] + f) * 0.35 + li * 2)
+            var fall = (h / 0.1 if h < 0.1 else pow(1 - h, Float32(1.6))) * pulse * 0.8 * w
+            sum += F4(fall * (0.1 + (0.9 * hue + 0.1) * h), fall * (1 - 0.75 * h), fall * (0.45 + 0.4 * h), 0)
+    return sum
