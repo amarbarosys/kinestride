@@ -25,6 +25,7 @@ comptime F4 = SIMD[DType.float32, 4]
 comptime F8 = SIMD[DType.float32, 8]
 comptime BIG = Float32(3.4e38)
 comptime NEAR_M = Float32(get_defined_int["LIVING_NEAR", 150]())  # trees are geometry within this range (SCALE.md section 2)
+comptime CLUMP_M = Float32(get_defined_int["LW_CLUMP", 80]())  # crowns are leaf clumps and tiers within this range of the eye, one envelope beyond
 comptime HMAX_M = Float32(40)  # tallest tree, the slot height scale and the ray's skip bound
 comptime HDR = 8  # world.bin header: N, sea, C, TN, max terrain height, then the offsets of cells (= HDR), slots, tail
 comptime CROWN = SIMD[DType.float32, 8](0.085, 0.25, 0.6, 0.13, 0.2, 0.22, 0, 0)
@@ -201,6 +202,56 @@ def ellipsoid(o: F4, d: F4, c: F4, r: Float32, rz: Float32) -> F4:
 
 
 @always_inline
+def rnd(x: Int, k: Int) -> Float32:
+    """A hash in 0..1 of x and the stream k."""
+    return Float32(((x * (2654435761 + k * 40503) + k * 97) >> 9) & 0xFFFF) / 65535
+
+
+@always_inline
+def crown(o: F4, d: F4, tr: F8, kind: Int, cz: Float32, rz: Float32, h0: Int, env: F4) -> F4:
+    """The leaf-clump crown of a tree whose envelope the ray hit (env): a broadleaf is a core and 5-8 clumps on its shell, a spruce 3-5 stacked
+    skirts, a pine 3-4 stacked discs, all inside the envelope; a per-tree hash places them. The closest hit, or a miss through the gaps."""
+    var best = F4(BIG, 0, 0, 0)
+    var R = tr[4] * (Float32(1) if kind == 5 else Float32(1.4))
+    var RZ = rz * tr[3]
+    if kind == 0:
+        var n = 3 + Int(rnd(h0, 0) * 2.99)
+        var rb = 0.85 * tr[4]
+        for k in range(5):
+            if k >= n:
+                break
+            var f = Float32(k) / Float32(n)
+            var rr = rb * (1 - 0.75 * f) * (0.94 + 0.12 * rnd(h0, 1 + k))
+            var tier = cone(o, d, F4(tr[0], tr[1], tr[2] + (0.1 + 0.675 * f) * tr[3], 0), rr, (0.12 + 0.55 * (1 - f) * 0.5 + 0.1 * Float32(n - 3)) * tr[3] * 0.9)
+            if tier[0] < best[0]:
+                best = tier
+        return best
+    if kind == 5:
+        var n = 3 + Int(rnd(h0, 0) * 1.99)
+        for k in range(4):
+            if k >= n:
+                break
+            var disc = ellipsoid(o, d, F4(tr[0], tr[1], tr[2] + (0.72 + 0.08 * Float32(k)) * tr[3], 0), R * (0.95 - 0.1 * Float32(k)) * (0.94 + 0.12 * rnd(h0, 1 + k)), 0.075 * tr[3])
+            if disc[0] < best[0]:
+                best = disc
+        return best
+    var c = F4(tr[0], tr[1], tr[2] + cz * tr[3], 0)
+    best = ellipsoid(o, d, c, 0.72 * R, 0.72 * RZ)
+    var n = 5 + Int(rnd(h0, 0) * 3.99)
+    for k in range(8):
+        if k >= n:
+            break
+        var th = (Float32(k) + 0.8 * rnd(h0, 1 + 3 * k)) / Float32(n) * 6.2831853
+        var zz = -0.25 + 1.15 * rnd(h0, 2 + 3 * k)
+        var rr = sqrt(1 - zz * zz)
+        var sz = 0.30 + 0.10 * rnd(h0, 3 + 3 * k)
+        var h = ellipsoid(o, d, F4(c[0] + 0.58 * R * rr * cos(th), c[1] + 0.58 * R * rr * sin(th), c[2] + 0.58 * RZ * zz, 0), sz * R, sz * RZ)
+        if h[0] < best[0]:
+            best = h
+    return best
+
+
+@always_inline
 def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
     """The tree of slot (ti, tj) along the ray: (t, normal, material, glow, hue)."""
     var tr = tree_at(T, ti, tj)
@@ -212,11 +263,15 @@ def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
         var cz = Float32(0.56) if kind == 1 else (Float32(0.62) if kind == 3 else (Float32(0.55) if kind == 4 else Float32(0.82)))
         var rz = Float32(0.42) if kind == 1 else (Float32(0.38) if kind == 3 else (Float32(0.45) if kind == 4 else Float32(0.14)))
         best = ellipsoid(o, d, F4(tr[0], tr[1], tr[2] + cz * tr[3], 0), tr[4] * (Float32(1) if kind == 5 else Float32(1.4)), rz * tr[3])
+        if best[0] < BIG and (tr[0] - o[0]) * (tr[0] - o[0]) + (tr[1] - o[1]) * (tr[1] - o[1]) < (CLUMP_M / T[2]) * (CLUMP_M / T[2]):
+            best = crown(o, d, tr, kind, cz, rz, (ti * 73856093) ^ (tj * 19349663), best)
     for part in range(0 if kind == 1 or kind == 3 or kind == 4 or kind == 5 else 2):
         var c = cone_part(kind, part)
         if c[3] == 0:
             break
         var h = cone(o, d, F4(tr[0], tr[1], tr[2] + c[0] * tr[3], 0), c[1] * tr[4], c[2] * tr[3])
+        if kind == 0 and h[0] < BIG and (tr[0] - o[0]) * (tr[0] - o[0]) + (tr[1] - o[1]) * (tr[1] - o[1]) < (CLUMP_M / T[2]) * (CLUMP_M / T[2]):
+            h = crown(o, d, tr, kind, 0, 0, (ti * 73856093) ^ (tj * 19349663), h)
         if h[0] < best[0]:
             best = h
     var hue = Float32(((ti * 73856093) ^ (tj * 19349663)) & 1023) / 1023
