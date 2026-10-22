@@ -6,8 +6,13 @@ Table: header [N, sea, C, TN]; 5 floats per terrain cell k = j N + i (height | r
 terrain cells of C metres (render.mojo cam[16] = C), so x, y and z share one factor. Positions are unwrapped; indices
 wrap (a torus) with a mask: N and TN are powers of two (an integer modulo by a runtime value took 2.3 ms of the frame).
 
-After the world (header word 7 = its length) the host appends the surface's control grid (lw_ctrl, never in the file): the
-highest control, then N x N controls, then N x N cell bounds (the maximum of each cell's 16 controls). The macro surface is the uniform cubic B-spline over them (C1 across cells, so the 20 m
+The file ends with a tail (header word 7 = its offset, tools/export_bin.mjs): the trails, P polylines (word 0 = P, then each one's
+vertex count, then the vertices, one word each: x | y << 16 as uint16 at N / 65536 cells, wrapping). The habitat word holds the trail
+level in its fraction (habitat + level / 256), and the ground colour is without the trail tint.
+
+After the file (lw_ctrl sets header word 7 to the file's length) the host appends the surface's control grid (lw_ctrl, never in the file): the
+highest control, then N x N controls, then N x N cell bounds (the maximum of each cell's 16 controls), then the file's tail offset, then
+the trail index: N x N + 1 offsets into a list of segment ids (the vertex a segment starts at) per terrain cell, for the segments within 2 m of the cell. The macro surface is the uniform cubic B-spline over them (C1 across cells, so the 20 m
 facets and stair cliffs are gone); the controls are the height nodes deconvolved twice on dry nodes (the surface keeps within
 a few metres of the nodes) and pushed down on wet nodes until the surface there is at or under the sea, so rivers and lakes stay
 water. The spline is a convex combination of its 16 controls, so their maximum bounds a cell's ground exactly (and the cell bound is one load).
@@ -141,6 +146,62 @@ def lw_height(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
 
 
 @always_inline
+def wrapd(d: Float32, n: Float32) -> Float32:
+    return d - n * floor(d / n + 0.5)  # a difference taken the short way round the torus
+
+
+@always_inline
+def trail_d(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
+    """Distance in terrain cells from (x, y) to the nearest trail segment indexed for its cell (2 m or less away), 1 when none."""
+    var n = Int(T[0])
+    var base = Int(T[7]) + 1 + 2 * n * n  # the file's tail offset, then the index
+    var tail = Int(T[base])
+    var k = (Int(floor(y)) & (n - 1)) * n + (Int(floor(x)) & (n - 1))
+    var vs = tail + 1 + Int(T[tail])
+    var best = Float32(1)
+    for q in range(Int(T[base + 1 + k]), Int(T[base + 2 + k])):
+        var v = Int(T[base + 2 + n * n + q])
+        var w0 = bitcast[DType.uint32](T[vs + v])
+        var w1 = bitcast[DType.uint32](T[vs + v + 1])
+        var x0 = Float32(w0 & 65535) / 65536 * Float32(n)
+        var y0 = Float32(w0 >> 16) / 65536 * Float32(n)
+        var ex = wrapd(Float32(w1 & 65535) / 65536 * Float32(n) - x0, Float32(n))
+        var ey = wrapd(Float32(w1 >> 16) / 65536 * Float32(n) - y0, Float32(n))
+        var px = wrapd(x - x0, Float32(n))
+        var py = wrapd(y - y0, Float32(n))
+        var t = min(max((px * ex + py * ey) / max(ex * ex + ey * ey, Float32(1e-9)), Float32(0)), Float32(1))
+        best = min(best, sqrt((px - t * ex) * (px - t * ex) + (py - t * ey) * (py - t * ey)))
+    return best
+
+
+@always_inline
+def trail_xy(T: Pointer[Float32, _], v: Int) -> F4:
+    """Vertex v (counted over all polylines in the tail) as (x, y, polylines, vertices) in terrain cells."""
+    var n = Int(T[0])
+    var tail = Int(T[Int(T[7]) + 1 + 2 * n * n])
+    var np = Int(T[tail])
+    var nv = 0
+    for p in range(np):
+        nv += Int(T[tail + 1 + p])
+    var w = bitcast[DType.uint32](T[tail + 1 + np + min(max(v, 0), nv - 1)])
+    return F4(Float32(w & 65535) / 65536 * Float32(n), Float32(w >> 16) / 65536 * Float32(n), Float32(np), Float32(nv))
+
+
+@always_inline
+def lw_trail(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
+    """The baked trail level 0..1 (0.85 of it is the far tint), bilinear over the nodes: the fraction of the habitat word."""
+    var i = Int(floor(x))
+    var j = Int(floor(y))
+    var fx = x - Float32(i)
+    var fy = y - Float32(j)
+    var out = Float32(0)
+    for k in range(4):
+        var v = cell(T, i + (k & 1), j + (k >> 1), 4)
+        out += (v - floor(v)) * (fx if k & 1 else 1 - fx) * (fy if k >> 1 else 1 - fy)
+    return out * (256 / 255)
+
+
+@always_inline
 def cone(o: F4, d: F4, c: F4, r: Float32, h: Float32) -> F4:
     """(t, normal) of the ray on a solid cone (side and base disc), base circle (c, r) at c.z, apex c + (0, 0, h); h < 0
     hangs down."""
@@ -270,7 +331,7 @@ def prop_at(T: Pointer[Float32, _], ti: Int, tj: Int) -> F8:
     var x = (Float32(ti) + g + (1 - 2 * g) * rnd(h, 2)) * tc
     var y = (Float32(tj) + g + (1 - 2 * g) * rnd(h, 3)) * tc
     var z = lw_height(T, x, y)
-    if z < T[1] + 0.5 / T[2]:
+    if z < T[1] + 0.5 / T[2] or trail_d(T, x, y) < (0.9 + m) / T[2]:  # water, or a trail's ribbon (0.6 m half width and its soft edge)
         return no
     var sy = s * (0.8 if kind == 0 else (1.0 if kind == 1 else 0.2 / m))
     var sz = s * (0.6 if kind == 0 else (0.7 if kind == 1 else 0.2 / m))
@@ -393,6 +454,8 @@ def lw_ctrl(world: List[Float32]) -> List[Float32]:
     var T = world.unsafe_ptr()
     var n = Int(T[0])
     var sea = T[1]
+    var tail = Int(T[7])
+    tab[7] = Float32(len(world))  # the control grid starts where the file ends
     var z = List[Float32](length=n * n, fill=0)
     for j in range(n):
         for i in range(n):
@@ -431,6 +494,37 @@ def lw_ctrl(world: List[Float32]) -> List[Float32]:
                 for a in range(4):
                     m = max(m, c[((j - 1 + b) & (n - 1)) * n + ((i - 1 + a) & (n - 1))])
             tab.append(m)
+    tab.append(Float32(tail))
+    var np = Int(T[tail])  # the trail index: per cell, the segments within 2 m (0.1 cell) of it
+    var vs = tail + 1 + np
+    var segs = List[Int]()
+    var voff = 0
+    for p in range(np):
+        for v in range(voff, voff + Int(T[tail + 1 + p]) - 1):
+            segs.append(v)
+        voff += Int(T[tail + 1 + p])
+    var cnt = List[Int](length=n * n + 1, fill=0)
+    var own = List[List[Int]]()
+    for _ in range(n * n):
+        own.append(List[Int]())
+    for v in segs:
+        var w0 = bitcast[DType.uint32](T[vs + v])
+        var w1 = bitcast[DType.uint32](T[vs + v + 1])
+        var x0 = Float32(w0 & 65535) / 65536 * Float32(n)
+        var y0 = Float32(w0 >> 16) / 65536 * Float32(n)
+        var x1 = x0 + wrapd(Float32(w1 & 65535) / 65536 * Float32(n) - x0, Float32(n))
+        var y1 = y0 + wrapd(Float32(w1 >> 16) / 65536 * Float32(n) - y0, Float32(n))
+        for cj in range(Int(floor(min(y0, y1) - 0.1)), Int(floor(max(y0, y1) + 0.1)) + 1):
+            for ci in range(Int(floor(min(x0, x1) - 0.1)), Int(floor(max(x0, x1) + 0.1)) + 1):
+                own[(cj & (n - 1)) * n + (ci & (n - 1))].append(v)
+    var run = 0
+    for k in range(n * n):
+        tab.append(Float32(run))
+        run += len(own[k])
+    tab.append(Float32(run))
+    for k in range(n * n):
+        for v in own[k]:
+            tab.append(Float32(v))
     return tab^
 
 

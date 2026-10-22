@@ -36,7 +36,7 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
 from city import city_hit
-from living import cell, lw_albedo, lw_hit, lw_lit, sky_cam
+from living import cell, lw_albedo, lw_hit, lw_lit, lw_trail, sky_cam, trail_d
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -564,6 +564,11 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         base = base * tint * (1 - rock) + V3(0.4, 0.39, 0.36, 0) * (grain * rock)
         var wetg = min(max(1 - (u[2] - T[1]) * cam[16] / 3, Float32(0)), Float32(1))  # 0-3 m over the sea: wet sand, darker and a touch cooler, wettest at the line
         base = base * (1 - 0.4 * wetg * wetg) * V3(1 - 0.08 * wetg, 1 - 0.02 * wetg, 1 + 0.04 * wetg, 0)
+        var tr = lw_trail(T, u[0], u[1]) * 0.85 * min(max((dm - 40) / 60, Float32(0)), Float32(1))  # trails: the 20 m cell tint from 40 m out, packed earth ribbon (1.2 m, soft edge) within 100 m
+        if dm < 100:
+            var rb = min(max((0.85 - trail_d(T, u[0], u[1]) * cam[16]) / 0.4, Float32(0)), Float32(1))
+            tr = max(tr, rb * rb * (3 - 2 * rb) * 0.95 * min(max((100 - dm) / 40, Float32(0)), Float32(1)))
+        base = base * (1 - tr) + V3(0.5, 0.42, 0.3, 0) * (grain * tr)
         col = light(cam, base * base, n, view, sh, ao * a[3], Float32(0.05) if hb == 0 else 0)  # wet-looking scree catches the sun
         if hb == 2:  # meadow grass: back-lit sheen when looking toward the sun
             col += base * base * (0.35 * pow(1 - abs(dot(n, view)), Float32(4)) * max(dot(view, s), Float32(0)) * sh * (1 - cam[30]))
