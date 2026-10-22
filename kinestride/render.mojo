@@ -437,8 +437,17 @@ def atmosphere(cam: TCAM, view: V3) -> V3:
 
 
 @always_inline
+def cloud(cam: TCAM, x: Float32, y: Float32) -> Float32:
+    """Cover 0..1 of the cloud layer over (x, y) m: two value-noise octaves at 600 m, drifting with the wind (cam[27] s)."""
+    var u = (x + cam[27] * 8) / 600
+    var v = (y + cam[27] * 3) / 600
+    var c = 0.65 * vnoise(u, v) + 0.35 * vnoise(u * 2.7 + 5, v * 2.7)
+    return min(max((c - 0.5) * 4, Float32(0)), Float32(1))
+
+
+@always_inline
 def living_sky(cam: TCAM, view: V3) -> V3:
-    """Analytic atmosphere, sun disc and halo, stars at night (linear)."""
+    """Analytic atmosphere, sun disc and halo, stars at night, the cloud layer over them (linear)."""
     var c = atmosphere(cam, view)
     if cam[30] < 0.5:
         var r = (1 - dot(view, sun(cam))) / 1.6e-4  # ~1 deg disc
@@ -447,6 +456,12 @@ def living_sky(cam: TCAM, view: V3) -> V3:
         var q = hash2(Int(floor(view[0] * 400)) * 7919 + Int(floor(view[1] * 400)), Int(floor(view[2] * 400)))
         if q > 0.9985:
             c += V3(0.8, 0.8, 0.9, 0) * cam[30]
+    if view[2] > 0.02:  # 1.5 km up: the same field that shades the ground, thinning into the haze
+        var t = (1500 - cam[2]) / view[2]
+        var cc = cloud(cam, cam[0] + view[0] * t, cam[1] + view[1] * t) * exp(-t / 40000)
+        var hz = V3(cam[23], cam[24], cam[25], 0)
+        var lit = hz * hz * 0.5 + V3(1, 0.95, 0.88, 0) * (0.9 * max(sun(cam)[2], Float32(0)) * (1 - cam[30]))
+        c = c * (1 - cc) + lit * ((1.15 - 0.4 * cc) * cc)
     return c
 
 
@@ -463,6 +478,9 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     var sh = lw_lit(T, u[0], u[1], cam[28], cam[29])
     comptime if SHADOW == 2:
         sh = min(sh, shadow_map(sm, cam, hit, EMPTY, dot(n, sun(cam))))
+    var s = sun(cam)
+    var up = (1500 - hit[2]) / max(s[2], Float32(0.05))  # along the sun ray to the cloud layer
+    sh *= 1 - 0.65 * cloud(cam, hit[0] + s[0] * up, hit[1] + s[1] * up)
     var col: V3
     if mat == 2:  # water: two travelling swells tilt the normal; the sky by Fresnel, a sun glint
         var t = cam[27]
