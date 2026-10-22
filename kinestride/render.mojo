@@ -483,14 +483,18 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
     var up = (1500 - hit[2]) / max(s[2], Float32(0.05))  # along the sun ray to the cloud layer
     sh *= 1 - 0.65 * cloud(cam, hit[0] + s[0] * up, hit[1] + s[1] * up)
     var col: V3
-    if mat == 2:  # water: two travelling swells tilt the normal; the sky by Fresnel, a sun glint
+    var dm = h[0] * sqrt(dot(ray, ray))  # metres to the hit
+    if mat == 2:  # water: two travelling swells plus 1.6-3.7 m ripples (faded with distance) tilt the normal; sky by Fresnel, sun glint
         var t = cam[27]
-        n = unit(V3(0.05 * cos(t * 1.7 + u[0] * 2.1 + u[1] * 1.3), 0.05 * cos(t * 2.3 - u[0] * 0.9 + u[1] * 2.6), 1, 0))
+        var rp = 0.03 * exp(-dm / 80)
+        n = unit(V3(0.05 * cos(t * 1.7 + u[0] * 2.1 + u[1] * 1.3) + rp * cos(t * 3.1 + hit[0] * 1.7 - hit[1] * 0.9) + 0.5 * rp * cos(t * 4.7 - hit[0] * 1.3 + hit[1] * 3.9),
+                    0.05 * cos(t * 2.3 - u[0] * 0.9 + u[1] * 2.6) + rp * cos(t * 2.9 + hit[0] * 0.8 + hit[1] * 1.9) + 0.5 * rp * cos(t * 5.3 + hit[0] * 3.6 + hit[1] * 1.1), 1, 0))
         var r = view - n * (2 * dot(view, n))
         var fr = 0.02 + 0.98 * pow(1 - max(-dot(n, view), Float32(0)), Float32(5))
         var a = lw_albedo(T, u[0], u[1])
         col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
-        col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), Float32(200)) * 3 * (1 - cam[30]))
+        var e = 200 / (1 + dm * 0.004)  # far water is rougher per pixel: a wider, dimmer glint instead of sparkle
+        col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), e) * 3 * sqrt(e / 200) * (1 - cam[30]))
     elif mat >= 3:  # a tree: leaf colour by species (web/world.mjs SPECIES), glow-fern lit at night (hue per tree)
         var g = h[5] * cam[30]
         var sp = mat - 3
@@ -519,7 +523,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var amp = Float32(0.4) if hb == 0 else (Float32(0.3) if hb == 1 else (Float32(0.35) if hb == 2 else (Float32(0.15) if hb == 3 else (Float32(0.5) if hb == 4 else Float32(0.4)))))
         var nx = hit[0] * fq * (Float32(0.35) if hb == 2 else Float32(1))  # grass: streaks along y
         var grain = 1 - amp * 0.5 + amp * vnoise(nx, hit[1] * fq)
-        var far = min(max((h[0] * sqrt(dot(ray, ray)) - 100) / 100, Float32(0)), Float32(1))  # past 100-200 m
+        var far = min(max((dm - 100) / 100, Float32(0)), Float32(1))  # past 100-200 m
         var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1)) * Float32(1 - get_defined_int["LW_NOCANOPY", 0]())  # dark green: a stand's crowns
         grain = grain * (1 - canopy) + canopy * (0.55 + 0.9 * vnoise(hit[0] * 0.17, hit[1] * 0.17) * vnoise(hit[0] * 0.5 + 7, hit[1] * 0.5))  # 6 m crowns, gaps
         var base = V3(a[0], a[1], a[2], 0) * grain
@@ -529,8 +533,10 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var rock = min(max((0.8 - n[2]) * 4, Float32(0)), Float32(1)) * 0.6
         var tint = V3(1, 1, 1, 0) if hb == 0 else V3(0.88, 1.06, 0.9, 0) * (1 - dry) + V3(1.18, 1.04, 0.72, 0) * dry  # scree stays grey
         base = base * tint * (1 - rock) + V3(0.4, 0.39, 0.36, 0) * (grain * rock)
-        col = light(cam, base * base, n, view, sh, ao * a[3], 0)
-    var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
+        col = light(cam, base * base, n, view, sh, ao * a[3], Float32(0.05) if hb == 0 else 0)  # wet-looking scree catches the sun
+        if hb == 2:  # meadow grass: back-lit sheen when looking toward the sun
+            col += base * base * (0.35 * pow(1 - abs(dot(n, view)), Float32(4)) * max(dot(view, s), Float32(0)) * sh * (1 - cam[30]))
+    var d = dm / cam[16]  # world units, as the web's fog
     var k = 0.006 * (0.6 + 0.5 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, a little thicker in valleys
     var far = pf[LWO] * Float32(LIVING_FAR) / 128
     var fog = max(1 - exp(-max(d - 2.5, Float32(0)) * k), min(max((d - far * 0.7) / (far * 0.3), Float32(0)), Float32(1)))
