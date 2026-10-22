@@ -31,7 +31,7 @@ from max.gpu.sync import barrier
 from max.gpu.host import DeviceContext
 from layout import TileTensor, TensorLayout, row_major
 from world import NP, PW, height_grad
-from convex import Sp, ConSet, collide, collide_hfield, primitive_pair, Height, ELLIPSOID, MESH, BOX, T as CT, S as CS, V as CVEC  # convex.mojo's scalar type (float64 with -DCCD64=1, which the export sets)
+from convex import Sp, ConSet, collide, collide_hfield, primitive_pair, Height, HCons, ELLIPSOID, MESH, BOX, T as CT, S as CS, V as CVEC  # convex.mojo's scalar type (float64 with -DCCD64=1, which the export sets)
 import game_state as game
 
 comptime NB = get_defined_int["NBODY"]()
@@ -190,8 +190,11 @@ comptime SLEEP = get_defined_int["SLEEP", 0]() == 1  # mj_sleep (model.py sleep_
 comptime SLPF = CGF + (NB if GRAVCOMP else 0)
 comptime GAMEF = SLPF + (1 + NV if SLEEP else 0)  # GAME: rules appended to mf.bin: basal drain, work rate, health regen
 comptime NFL = GAMEF + (3 if GAME else 0)
+comptime NFLT = NFL + (2 + HFNR * HFNC if HTAB else 0)  # mf.bin length: HTAB appends the heightfield table last (CHT == NFL)
 comptime HFNR = get_defined_int["HFNR", 2]()  # HFEXACT: grid rows and columns of the MuJoCo hfield (the engine's grid is virtual and endless, same step)
 comptime HFNC = get_defined_int["HFNC", 2]()
+comptime HTAB = get_defined_int["HTAB", 0]() == 1  # HFEXACT: node heights from a table in mf (model.py export HTAB=1), the grid clamped like MuJoCo's
+comptime CHT = get_defined_int["CHT", 0]()  # HTAB: table centre x, y (world), then HFNR x HFNC node heights above the hfield origin, row r along +y
 # smooth.bin rows (per animal): xpos, xquat, xipos of bodies 1.., geom_xpos, xanchor, xaxis
 comptime OXQ = 3 * (NB - 1)
 comptime OXI = 7 * (NB - 1)
@@ -299,7 +302,7 @@ comptime OQAPP = OSLP + (1 if SLEEP else 0)  # NXF: qfrc_applied (MuJoCo mj_xfrc
 comptime NROW = OQAPP + (NV if NXF > 0 else 0)
 comptime SLEPT: Float32 = 11  # one past mjMINAWAKE (10) quiet checks
 comptime LI = row_major[NI]()
-comptime LF = row_major[NFL]()
+comptime LF = row_major[NFLT]()
 comptime LQ = row_major[NQ * F]()
 comptime LO = row_major[NROW * F]()
 comptime LV = row_major[NV * F]()
@@ -1429,6 +1432,18 @@ struct TerrainH(Height):
         return (height_grad(self.dx * Float32(c) - self.size0, self.dx * Float32(r) - self.size1, self.params)[0] - self.lo).cast[CT]()
 
 
+struct TerrainTab[o: MutOrigin](Height):
+    """HTAB: the grid's node heights read from mf (MuJoCo's hfield_data x size[2]); an app may rewrite them and the
+    table centre between launches to stream terrain around an animal (living-world's walk)."""
+    var t: Pointer[Float32, Self.o]  # the first node height
+
+    def __init__(out self, t: Pointer[Float32, Self.o]):
+        self.t = t
+
+    def h(self, r: Int, c: Int) -> CS:
+        return self.t[r * HFNC + c].cast[CT]()
+
+
 def hfield_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, q2: Q4, pos2: V3, b: Int):
     """Port of mjc_ConvexHField (engine_collision_convex.c:1120), in convex.mojo: one GJK + EPA per cell-triangle prism under
     the mesh, on world.mojo's terrain function at the grid nodes (the grid is MuJoCo's, extended without limit). The mesh
@@ -1448,7 +1463,14 @@ def hfield_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, q2:
     mesh.pos = pos2.cast[CT]() + org
     var c = rows3(q2)
     mesh.r0 = c[0].cast[CT](); mesh.r1 = c[1].cast[CT](); mesh.r2 = c[2].cast[CT]()
-    var cs = collide_hfield(TerrainH(terrain(mf), lo, dx, size0, size1), mesh, HFNR, HFNC, size0.cast[CT]()[0], size1.cast[CT]()[0], size2.cast[CT]()[0],
+    var cs: HCons
+    comptime if HTAB:
+        comptime assert CHT == NFL, "HTAB: model.py puts the table last in mf (CHT == NFL)"
+        mesh.pos = mesh.pos - CVEC(mf[CHT].cast[CT]()[0], mf[CHT + 1].cast[CT]()[0], 0, 0)  # world -> the table's centre
+        cs = collide_hfield(TerrainTab[MutAnyOrigin](mf.ptr.unsafe_offset(CHT + 2)), mesh, HFNR, HFNC, size0.cast[CT]()[0], size1.cast[CT]()[0], size2.cast[CT]()[0],
+                            size3.cast[CT]()[0], margin.cast[CT]()[0], mf[CCV].cast[CT]()[0], rb2.cast[CT]()[0], False, CVEC(0))
+    else:
+        cs = collide_hfield(TerrainH(terrain(mf), lo, dx, size0, size1), mesh, HFNR, HFNC, size0.cast[CT]()[0], size1.cast[CT]()[0], size2.cast[CT]()[0],
                             size3.cast[CT]()[0], margin.cast[CT]()[0], mf[CCV].cast[CT]()[0], rb2.cast[CT]()[0], True, CVEC(0))
     var com = V3(get(res, f, OSC + 3 * Int(mi[ROOT + b])), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 1), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 2), 0)
     var count = 0
@@ -3993,7 +4015,7 @@ def host[T: DType, L: TensorLayout](mut a: List[UInt8], layout: L) -> TileTensor
 def main_cpu(dir: String) raises:
     """-DCPU=1: main's run on the host (same files in, same smooth.bin / state.bin out, same timing line)."""
     var mi = load(dir + "mi.bin", NI)
-    var mf = load(dir + "mf.bin", NFL)
+    var mf = load(dir + "mf.bin", NFLT)
     var qp = load(dir + "qpos.bin", NQ * F)
     var qv = load(dir + "qvel.bin", NV * F)
     var uv = load(dir + "ctrl.bin", NUC * F) if NUC > 0 else List[UInt8](length=4 * F, fill=0)
@@ -4041,14 +4063,14 @@ def main() raises:
     _ = external_call["setenv", Int32]("MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE_PERCENT".unsafe_ptr(), "0".unsafe_ptr(), Int32(0))
     var ctx = DeviceContext(0)
     var mi_b = ctx.enqueue_create_buffer[DType.int32](NI)
-    var mf_b = ctx.enqueue_create_buffer[DType.float32](NFL)
+    var mf_b = ctx.enqueue_create_buffer[DType.float32](NFLT)
     var q_b = ctx.enqueue_create_buffer[DType.float32](NQ * F)
     var v_b = ctx.enqueue_create_buffer[DType.float32](NV * F)
     var u_b = ctx.enqueue_create_buffer[DType.float32](max(NUC, 1) * F)
     var o_b = ctx.enqueue_create_buffer[DType.float32](NROW * F)
     o_b.enqueue_fill(0)  # warm start reads OWARM before the first step writes it
     var mi = load(dir + "mi.bin", NI)
-    var mf = load(dir + "mf.bin", NFL)
+    var mf = load(dir + "mf.bin", NFLT)
     var qp = load(dir + "qpos.bin", NQ * F)
     var qv = load(dir + "qvel.bin", NV * F)
     var uv = load(dir + "ctrl.bin", NUC * F) if NUC > 0 else List[UInt8](length=4 * F, fill=0)

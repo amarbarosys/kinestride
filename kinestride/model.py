@@ -1221,6 +1221,13 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
     for block in (mocap_block(m), gravcomp_block(m), implicit_block(m), mid_block(m), mpair_block(m), sleep_block(m)):  # after the equality block, in Mojo's order: CMOC follows CEQM, CGC follows CMOC, CIMP follows CGC, CMID follows the implicit block
         if block:
             ints, floats, sizes = ints + [block[0]], floats + [block[1]], sizes | block[2]
+    if hfexact and os.environ.get('HTAB') and 'HFNR' in sizes:  # table heightfield: the engine reads node heights, not the function
+        g = next(g for g in range(m.ngeom) if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_HFIELD)
+        h = m.geom_dataid[g]
+        n = int(m.hfield_nrow[h] * m.hfield_ncol[h])
+        cht = sum(len(f) for f in floats)
+        floats = floats + [np.concatenate([[0, 0], m.hfield_data[m.hfield_adr[h]:m.hfield_adr[h] + n] * m.hfield_size[h][2]])]
+        sizes |= {'HTAB': 1, 'CHT': cht}
     np.concatenate(ints).astype(np.int32).tofile(out / 'mi.bin')
     np.concatenate(floats).astype(np.float32).tofile(out / 'mf.bin')
     (out / 'sizes.txt').write_text(' '.join(f'-D{k}={v}' for k, v in sizes.items()) + '\n')
