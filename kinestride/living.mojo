@@ -252,6 +252,71 @@ def crown(o: F4, d: F4, tr: F8, kind: Int, cz: Float32, rz: Float32, h0: Int, en
 
 
 @always_inline
+def prop_at(T: Pointer[Float32, _], ti: Int, tj: Int) -> F8:
+    """The ground prop of tree-grid cell (ti, tj), hashed (nothing stored): (x, y, z, half sizes x y z, yaw, kind) in terrain cells, kind -1 when none. Kind 0
+    boulder (scree, riparian), 1 bush (meadow, heather), 2 fallen log (spruce, beech); 0.3-2 m, in no tree's slot and not within 0.5 m of the water."""
+    var no = F8(0, 0, 0, 0, 0, 0, 0, -1)
+    var h = (ti * 19349663) ^ (tj * 83492791)
+    var hb = Int(cell(T, (ti + 2) >> 2, (tj + 2) >> 2, 4))  # the habitat of the node nearest the cell's middle, as the ground shows it (tree grid = 4 x the terrain's)
+    var p = Float32(0.3) if hb == 0 else (Float32(0.18) if hb == 1 else (Float32(0.04) if hb == 2 else (Float32(0.1) if hb == 3 else (Float32(0.22) if hb == 4 else Float32(0.1)))))
+    if rnd(h, 0) >= p or Int(byte(slot(T, ti, tj), 0)) != 0:
+        return no
+    var kind = 0 if hb < 2 else (1 if hb == 2 or hb == 4 else 2)
+    var u = rnd(h, 1)
+    var m = (0.3 + 1.7 * u * u * u) if kind == 0 else ((0.35 + 0.65 * u) if kind == 1 else (0.8 + 0.7 * u))  # half length / radius, m
+    var s = m / T[2]
+    var tc = T[0] / T[3]
+    var g = min(max(m / 5, Float32(0)), Float32(0.45))
+    var x = (Float32(ti) + g + (1 - 2 * g) * rnd(h, 2)) * tc
+    var y = (Float32(tj) + g + (1 - 2 * g) * rnd(h, 3)) * tc
+    var z = lw_height(T, x, y)
+    if z < T[1] + 0.5 / T[2]:
+        return no
+    var sy = s * (0.8 if kind == 0 else (1.0 if kind == 1 else 0.2 / m))
+    var sz = s * (0.6 if kind == 0 else (0.7 if kind == 1 else 0.2 / m))
+    return F8(x, y, z + 0.35 * sz, s, sy, sz, rnd(h, 4) * 6.2831853, Float32(kind))
+
+
+@always_inline
+def blob(o: F4, d: F4, c: F4, sx: Float32, sy: Float32, sz: Float32, yaw: Float32) -> F4:
+    """(t, normal) of the ray on an ellipsoid of half sizes sx, sy, sz about c, turned by yaw about z."""
+    var cs = cos(yaw)
+    var sn = sin(yaw)
+    var px = o[0] - c[0]
+    var py = o[1] - c[1]
+    var lx = (px * cs + py * sn) / sx
+    var ly = (py * cs - px * sn) / sy
+    var lz = (o[2] - c[2]) / sz
+    var dx = (d[0] * cs + d[1] * sn) / sx
+    var dy = (d[1] * cs - d[0] * sn) / sy
+    var dz = d[2] / sz
+    var A = dx * dx + dy * dy + dz * dz
+    var B = 2 * (lx * dx + ly * dy + lz * dz)
+    var disc = B * B - 4 * A * (lx * lx + ly * ly + lz * lz - 1)
+    if disc < 0:
+        return F4(BIG, 0, 0, 0)
+    var t = (-B - sqrt(disc)) / (2 * A)
+    if t <= 1e-4:
+        return F4(BIG, 0, 0, 0)
+    var nx = (lx + t * dx) / sx
+    var ny = (ly + t * dy) / sy
+    var n = F4(nx * cs - ny * sn, nx * sn + ny * cs, (lz + t * dz) / sz, 0)
+    n = n / sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
+    return F4(t, n[0], n[1], n[2])
+
+
+@always_inline
+def prop(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
+    """The prop of cell (ti, tj) along the ray: (t, normal, material 10 + kind, 0, hue, 0); a log is the long axis of the same blob."""
+    var p = prop_at(T, ti, tj)
+    var kind = Int(p[7])
+    if kind < 0:
+        return F8(BIG, 0, 0, 0, 0, 0, 0, 0)
+    var b = blob(o, d, F4(p[0], p[1], p[2], 0), p[3], p[4], p[5], p[6])
+    return F8(b[0], b[1], b[2], b[3], Float32(10 + kind), 0, rnd((ti * 19349663) ^ (tj * 83492791), 7), 0)
+
+
+@always_inline
 def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
     """The tree of slot (ti, tj) along the ray: (t, normal, material, glow, hue)."""
     var tr = tree_at(T, ti, tj)
@@ -414,6 +479,10 @@ def march(T: Pointer[Float32, _], o: F4, d: F4, t0: Float32, t1: Float32, cs: Fl
             if g[0] < best[0]:
                 best = g
         var ttop = top
+        if trees and zlo <= top + 2.2 / T[2]:  # the cell's prop (under 2 m high), near phase only
+            var pr = prop(T, Int(cx), Int(cy), o, d)
+            if pr[0] < best[0] and pr[0] <= t1:
+                best = pr
         if trees:  # the ground under any of the 5 x 5 slots: the bounds of the patches their block spans
             for nj in range(Int(floor((cy - 2) * cs)), Int(floor((cy + 3) * cs)) + 1):
                 for ni in range(Int(floor((cx - 2) * cs)), Int(floor((cx + 3) * cs)) + 1):

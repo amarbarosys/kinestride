@@ -514,6 +514,10 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         col = light(cam, V3(a[0], a[1], a[2], 0) * V3(a[0], a[1], a[2], 0), n, view, sh, ao, 0) * (1 - fr) + living_sky(cam, r) * fr
         var e = 200 / (1 + dm * 0.004)  # far water is rougher per pixel: a wider, dimmer glint instead of sparkle
         col += V3(1, 0.9, 0.7, 0) * (sh * pow(max(dot(r, sun(cam)), Float32(0)), e) * 3 * sqrt(e / 200) * (1 - cam[30]))
+    elif mat >= 10:  # a ground prop: 10 boulder (grey, speckled), 11 bush (leaf green, dry-tipped), 12 fallen log (bark)
+        var q = vnoise(hit[0] * 4, hit[1] * 4) * (0.6 + 0.4 * vnoise(hit[2] * 6, hit[0] * 3))
+        var base = V3(0.42, 0.4, 0.37, 0) * (0.7 + 0.5 * q) if mat == 10 else (V3(0.17, 0.27, 0.09, 0) * (0.8 + 0.5 * q) * V3(0.92 + 0.16 * h[6], 1, 1.08 - 0.16 * h[6], 0) if mat == 11 else V3(0.26, 0.19, 0.13, 0) * (0.75 + 0.5 * q))
+        col = light(cam, base * base, n, view, sh, ao, 0) + base * base * (0.08 * pow(1 - abs(dot(n, view)), Float32(2)) * (1 - cam[30]) if mat == 11 else 0)
     elif mat >= 3:  # a tree: leaf colour by species (web/world.mjs SPECIES), glow-fern lit at night (hue per tree)
         var g = h[5] * cam[30]
         var sp = mat - 3
