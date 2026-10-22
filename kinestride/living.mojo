@@ -6,8 +6,13 @@ Table: header [N, sea, C, TN]; 5 floats per terrain cell k = j N + i (height | r
 terrain cells of C metres (render.mojo cam[16] = C), so x, y and z share one factor. Positions are unwrapped; indices
 wrap (a torus) with a mask: N and TN are powers of two (an integer modulo by a runtime value took 2.3 ms of the frame).
 
-Surface: each terrain cell is two triangles split on its (0, 0)-(1, 1) diagonal, the web renderer's split, so lw_height
-is the exact surface lw_hit draws. Within NEAR_M the ray walks the tree grid (5 m), testing the parent terrain cell's
+After the world (header word 7 = its length) the host appends the surface's control grid (lw_ctrl, never in the file): the
+highest control, then N x N controls, then N x N cell bounds (the maximum of each cell's 16 controls). The macro surface is the uniform cubic B-spline over them (C1 across cells, so the 20 m
+facets and stair cliffs are gone); the controls are the height nodes deconvolved twice on dry nodes (the surface keeps within
+a few metres of the nodes) and pushed down on wet nodes until the surface there is at or under the sea, so rivers and lakes stay
+water. The spline is a convex combination of its 16 controls, so their maximum bounds a cell's ground exactly (and the cell bound is one load).
+
+Surface: each terrain cell is one bicubic patch of its 4 x 4 controls, so lw_height is the exact surface lw_hit draws. Within NEAR_M the ray walks the tree grid (5 m), testing the parent terrain cell's
 triangles over each step and the cones of the 5 x 5 slots around it; beyond, it walks the terrain grid, ground only
 (the forest is canopy colour there). materials: 0 sky, 1 ground, 2 water, 3 + species (spruce, beech, fern, birch,
 alder, pine).
@@ -74,20 +79,64 @@ def byte(v: Float32, b: Int) -> Float32:
     return Float32((bitcast[DType.uint32](v) >> UInt32(8 * b)) & 255)
 
 
+comptime F16 = SIMD[DType.float32, 16]
+
+
+@always_inline
+def ctl(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
+    var n = Int(T[0])
+    return T[Int(T[7]) + 1 + (j & (n - 1)) * n + (i & (n - 1))]
+
+
+@always_inline
+def cap(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
+    """The upper bound of cell (i, j)'s ground: the maximum of its 16 controls."""
+    var n = Int(T[0])
+    return T[Int(T[7]) + 1 + n * n + (j & (n - 1)) * n + (i & (n - 1))]
+
+
+@always_inline
+def patch(T: Pointer[Float32, _], i: Int, j: Int) -> F16:
+    """The 4 x 4 controls of cell (i, j): lane 4 b + a is control (i - 1 + a, j - 1 + b)."""
+    var n = Int(T[0])
+    var base = Int(T[7]) + 1
+    var c = F16(0)
+    for b in range(4):
+        var row = base + ((j - 1 + b) & (n - 1)) * n
+        for a in range(4):
+            c[4 * b + a] = T[row + ((i - 1 + a) & (n - 1))]
+    return c
+
+
+@always_inline
+def surf(c: F16, u: Float32, v: Float32) -> F4:
+    """(height, d/du, d/dv) of the cell's cubic B-spline patch at (u, v) in 0..1."""
+    var u2 = u * u
+    var u3 = u2 * u
+    var v2 = v * v
+    var v3 = v2 * v
+    var wu = F4((1 - u) * (1 - u) * (1 - u), 3 * u3 - 6 * u2 + 4, -3 * u3 + 3 * u2 + 3 * u + 1, u3) / 6
+    var du = F4(-(1 - u) * (1 - u), 3 * u2 - 4 * u, -3 * u2 + 2 * u + 1, u2) / 2
+    var wv = F4((1 - v) * (1 - v) * (1 - v), 3 * v3 - 6 * v2 + 4, -3 * v3 + 3 * v2 + 3 * v + 1, v3) / 6
+    var dv = F4(-(1 - v) * (1 - v), 3 * v2 - 4 * v, -3 * v2 + 2 * v + 1, v2) / 2
+    var h = Float32(0)
+    var hu = Float32(0)
+    var hv = Float32(0)
+    for b in range(4):
+        var r = c[4 * b] * wu[0] + c[4 * b + 1] * wu[1] + c[4 * b + 2] * wu[2] + c[4 * b + 3] * wu[3]
+        var dr = c[4 * b] * du[0] + c[4 * b + 1] * du[1] + c[4 * b + 2] * du[2] + c[4 * b + 3] * du[3]
+        h += wv[b] * r
+        hu += wv[b] * dr
+        hv += dv[b] * r
+    return F4(h, hu, hv, 0)
+
+
 @always_inline
 def lw_height(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
-    """Ground height at (x, y) on the cell's own triangle."""
+    """Ground height at (x, y): the cell's bicubic patch."""
     var i = Int(floor(x))
     var j = Int(floor(y))
-    var fx = x - Float32(i)
-    var fy = y - Float32(j)
-    var h00 = cell(T, i, j, 0)
-    var h11 = cell(T, i + 1, j + 1, 0)
-    if fx >= fy:
-        var h10 = cell(T, i + 1, j, 0)
-        return h00 + (h10 - h00) * fx + (h11 - h10) * fy
-    var h01 = cell(T, i, j + 1, 0)
-    return h00 + (h11 - h01) * fx + (h01 - h00) * fy
+    return surf(patch(T, i, j), x - Float32(i), y - Float32(j))[0]
 
 
 @always_inline
@@ -179,42 +228,95 @@ def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
 
 
 @always_inline
-def ground(T: Pointer[Float32, _], i: Int, j: Int, o: F4, d: F4, t0: Float32, t1: Float32) -> F8:
-    """The cell's two triangles along the ray between t0 and t1: (t, smooth normal, material)."""
-    var h00 = cell(T, i, j, 0)
-    var h10 = cell(T, i + 1, j, 0)
-    var h01 = cell(T, i, j + 1, 0)
-    var h11 = cell(T, i + 1, j + 1, 0)
+def ground(T: Pointer[Float32, _], c: F16, i: Int, j: Int, o: F4, d: F4, t0: Float32, t1: Float32) -> F8:
+    """The cell's patch c along the ray between t0 and t1: (t, analytic normal, material). The first sign change of the ray's height over
+    the patch on 4 samples, then 8 steps of false position."""
     var ox = o[0] - Float32(i)
     var oy = o[1] - Float32(j)
-    var best = BIG
-    for tri in range(2):
-        var b = (h10 - h00) if tri == 0 else (h11 - h01)
-        var c = (h11 - h10) if tri == 0 else (h01 - h00)
-        var den = d[2] - b * d[0] - c * d[1]
-        if den == 0:
-            continue
-        var t = (h00 + b * ox + c * oy - o[2]) / den
-        if t < t0 - 1e-4 or t > t1 + 1e-4 or t <= 0 or t >= best:
-            continue
-        var fx = ox + t * d[0]
-        var fy = oy + t * d[1]
-        if (tri == 0 and fx >= fy - 1e-4) or (tri == 1 and fy >= fx - 1e-4):
-            best = t
-    if best == BIG:
-        return F8(BIG, 0, 0, 0, 0, 0, 0, 0)
-    var fx = min(max(ox + best * d[0], Float32(0)), Float32(1))
-    var fy = min(max(oy + best * d[1], Float32(0)), Float32(1))
-    var gx = (h10 - h00) * (1 - fy) + (h11 - h01) * fy  # bilinear gradient: smooth shading over flat facets
-    var gy = (h01 - h00) * (1 - fx) + (h11 - h10) * fx
-    var l = sqrt(gx * gx + gy * gy + 1)
-    var water = o[2] + best * d[2] <= T[1] + 0.02
-    return F8(best, -gx / l, -gy / l, 1 / l, Float32(2) if water else Float32(1), 0, 0, 0)
+    var ta = t0
+    var fa = o[2] + ta * d[2] - surf(c, min(max(ox + ta * d[0], Float32(0)), Float32(1)), min(max(oy + ta * d[1], Float32(0)), Float32(1)))[0]
+    for k in range(1, 5):
+        var tb = t0 + (t1 - t0) * Float32(k) * 0.25
+        var fb = o[2] + tb * d[2] - surf(c, min(max(ox + tb * d[0], Float32(0)), Float32(1)), min(max(oy + tb * d[1], Float32(0)), Float32(1)))[0]
+        if fa * fb <= 0 and tb > 0:
+            var a = ta
+            var b = tb
+            var side = 0
+            for _ in range(8):
+                var t = (a * fb - b * fa) / (fb - fa) if fb != fa else 0.5 * (a + b)
+                var ft = o[2] + t * d[2] - surf(c, min(max(ox + t * d[0], Float32(0)), Float32(1)), min(max(oy + t * d[1], Float32(0)), Float32(1)))[0]
+                if ft * fb > 0:
+                    b = t
+                    fb = ft
+                    if side == -1:
+                        fa *= 0.5
+                    side = -1
+                else:
+                    a = t
+                    fa = ft
+                    if side == 1:
+                        fb *= 0.5
+                    side = 1
+            var th = (a * fb - b * fa) / (fb - fa) if fb != fa else 0.5 * (a + b)
+            var q = surf(c, min(max(ox + th * d[0], Float32(0)), Float32(1)), min(max(oy + th * d[1], Float32(0)), Float32(1)))
+            var l = sqrt(q[1] * q[1] + q[2] * q[2] + 1)
+            var water = o[2] + th * d[2] <= T[1] + 0.02
+            return F8(th, -q[1] / l, -q[2] / l, 1 / l, Float32(2) if water else Float32(1), 0, 0, 0)
+        ta = tb
+        fa = fb
+    return F8(BIG, 0, 0, 0, 0, 0, 0, 0)
+
+
+def lw_ctrl(world: List[Float32]) -> List[Float32]:
+    """world.bin's floats plus the surface's control grid (built here, once, on the host): the highest control, then N x N controls."""
+    var tab = world.copy()
+    var T = world.unsafe_ptr()
+    var n = Int(T[0])
+    var sea = T[1]
+    var z = List[Float32](length=n * n, fill=0)
+    for j in range(n):
+        for i in range(n):
+            z[j * n + i] = cell(T, i, j, 0)
+    var c = z.copy()
+    var s = z.copy()
+    for it in range(42):
+        for j in range(n):  # s = the spline's value at the nodes: [1, 4, 1] / 6 along x, then along y
+            for i in range(n):
+                s[j * n + i] = (c[j * n + ((i - 1) & (n - 1))] + 4 * c[j * n + i] + c[j * n + ((i + 1) & (n - 1))]) / 6
+        var t = s.copy()
+        for j in range(n):
+            for i in range(n):
+                s[j * n + i] = (t[((j - 1) & (n - 1)) * n + i] + 4 * t[j * n + i] + t[((j + 1) & (n - 1)) * n + i]) / 6
+        var worst = Float32(0)
+        for k in range(n * n):
+            if z[k] > sea + 1e-6:
+                if it < 2:  # dry nodes: deconvolve twice, the surface keeps near the nodes
+                    c[k] += z[k] - s[k]
+            else:
+                var ex = max(s[k] - sea, Float32(0))  # wet nodes: down until the surface there is at the sea
+                worst = max(worst, ex)
+                c[k] -= 1.4 * ex
+        if it >= 2 and worst < 0.0025:
+            break
+    var hi = Float32(-1e30)
+    for v in c:
+        hi = max(hi, v)
+    tab.append(hi)
+    for v in c:
+        tab.append(v)
+    for j in range(n):  # the cell bounds
+        for i in range(n):
+            var m = Float32(-1e30)
+            for b in range(4):
+                for a in range(4):
+                    m = max(m, c[((j - 1 + b) & (n - 1)) * n + ((i - 1 + a) & (n - 1))])
+            tab.append(m)
+    return tab^
 
 
 def march(T: Pointer[Float32, _], o: F4, d: F4, t0: Float32, t1: Float32, cs: Float32, trees: Bool) -> F8:
     """2-D DDA over cells of size cs (terrain cells) between ray parameters t0 and t1: each step tests the parent terrain
-    cell's triangles over the step and, with trees, the cones of the 5 x 5 tree slots; skipped where the ray is above
+    cell's patch over the step and, with trees, the cones of the 5 x 5 tree slots; skipped where the ray is above
     both. One body for the near (tree grid) and far (terrain grid) phases."""
     var p = o + d * t0
     var cx = floor(p[0] / cs)
@@ -234,26 +336,33 @@ def march(T: Pointer[Float32, _], o: F4, d: F4, t0: Float32, t1: Float32, cs: Fl
     var enter = t0
     var best = F8(BIG, 0, 0, 0, 0, 0, 0, 0)
     var hmax = HMAX_M / T[2]
+    var pi = -1000000  # the cell whose patch c holds: a near step is a quarter of a cell, so most steps keep it
+    var pj = -1000000
+    var c = F16(0)
     var full = True
     var stepx = True
     for _ in range(1024):
-        if enter >= t1 or enter >= best[0] or (d[2] >= 0 and o[2] + enter * d[2] > T[4] + hmax):
+        if enter >= t1 or enter >= best[0] or (d[2] >= 0 and o[2] + enter * d[2] > T[Int(T[7])] + hmax):
             break  # done, hit, or rising above the highest ground and tree
         var leave = min(min(mx, my), t1)
         var mid = o + d * (0.5 * (enter + leave))
         var i = Int(floor(mid[0]))
         var j = Int(floor(mid[1]))
         var zlo = min(o[2] + enter * d[2], o[2] + leave * d[2])
-        var top = max(max(cell(T, i, j, 0), cell(T, i + 1, j, 0)), max(cell(T, i, j + 1, 0), cell(T, i + 1, j + 1, 0)))
+        var top = cap(T, i, j)  # the patch is a convex combination of its 16 controls: their maximum bounds it
         if zlo <= top:
-            var g = ground(T, i, j, o, d, enter, leave)
+            if i != pi or j != pj:
+                pi = i
+                pj = j
+                c = patch(T, i, j)
+            var g = ground(T, c, i, j, o, d, enter, leave)
             if g[0] < best[0]:
                 best = g
         var ttop = top
-        if trees:  # the ground under any of the 5 x 5 slots: the terrain nodes their block spans
-            for nj in range(Int(floor((cy - 2) * cs)), Int(floor((cy + 3) * cs)) + 2):
-                for ni in range(Int(floor((cx - 2) * cs)), Int(floor((cx + 3) * cs)) + 2):
-                    ttop = max(ttop, cell(T, ni, nj, 0))
+        if trees:  # the ground under any of the 5 x 5 slots: the bounds of the patches their block spans
+            for nj in range(Int(floor((cy - 2) * cs)), Int(floor((cy + 3) * cs)) + 1):
+                for ni in range(Int(floor((cx - 2) * cs)), Int(floor((cx + 3) * cs)) + 1):
+                    ttop = max(ttop, cap(T, ni, nj))
         if trees and zlo <= ttop + hmax:  # 5 x 5 slots: a beech crown (up to 9 m radius) reaches two 5 m slots away
             for k in range(25 if full else 5):  # the whole window once, then only the column or row a step brings in
                 var di = k % 5 - 2 if full else (2 * Int(sx) if stepx else k - 2)
