@@ -217,17 +217,21 @@ def fill(vis: TVIS, base: Int32, id: UInt64, sx: V3, sy: V3, sz: V3):
             _ = Atomic.min[ordering=Ordering.RELAXED](vis.ptr.unsafe_offset(Int(base) + y * W + x), key)
 
 
+comptime BANK_S = Float32(-0.479)  # a gull rolls 0.5 rad, the outer wing (+x, the flock circles counter-clockwise) down: a walker under the circle looks up along the wing axis, and the roll turns the wings' underside to it instead of their edge
+comptime BANK_C = Float32(0.878)
+
+
 @always_inline
 def bird_vertex(pf: TPF, cam: TCAM, b: Int, k: Int) -> V3:
     """World position (m) of outline point k of gull b. The host writes each gull's state (centre, heading,
-    flap) into cam every frame and the outline into pf once; the wings lift with |x| times the flap, as the page's gulls."""
+    flap) into cam every frame and the outline into pf once; the wings lift with |x| times the flap, as the page's gulls, and the body rolls by BANK."""
     var s = CAMB + 8 * b
     var o = BIRD0 + 2 * k
     var x = pf[o]
     var y = pf[o + 1]
     var fx = cam[s + 3]
     var fy = cam[s + 4]
-    return V3(cam[s] + x * fy + y * fx, cam[s + 1] - x * fx + y * fy, cam[s + 2] + abs(x) * 0.55 * cam[s + 5], 0)
+    return V3(cam[s] + x * BANK_C * fy + y * fx, cam[s + 1] - x * BANK_C * fx + y * fy, cam[s + 2] + x * BANK_S + abs(x) * 0.55 * cam[s + 5], 0)
 
 
 comptime BIRDF = UInt64((1 << (32 - TB)) - 2)  # the animal field of a gull's key: no animal and not EMPTY's all ones; the triangle field holds gull * NTB + triangle
@@ -640,7 +644,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         if dm < 100:
             rb = min(max((0.85 - trail_d(T, u[0], u[1]) * cam[16]) / 0.4, Float32(0)), Float32(1))
             tr = max(tr, rb * rb * (3 - 2 * rb) * 0.95 * min(max((100 - dm) / 40, Float32(0)), Float32(1)))
-        base = base * (1 - tr) + V3(0.5, 0.42, 0.3, 0) * (grain * tr)
+        base = base * (1 - tr) + V3(0.80, 0.70, 0.52, 0) * (grain * tr)  # pale dry earth: the old (0.5, 0.42, 0.3) was the heath's brown, and a trail read as heath from the air
         var gw = lw_grass(T, u[0], u[1]) if dm < 30 else V3(0, 0, 0, 0)  # meadow and heather share here, bilinear over the nodes: the grass fades across habitat edges
         if gw[0] + gw[1] > 0.01 and n[2] > 0.5:  # blades: 7 shells over the ground within 30 m, thinned out by 18-30 m, each shell on its own turned, offset hash grid (about 6 cm)
             var cover = min((30 - dm) / 12, Float32(1)) * (1 - rb) * (1 - wetg) * min((gw[0] + gw[1]) * 1.3, Float32(1))
