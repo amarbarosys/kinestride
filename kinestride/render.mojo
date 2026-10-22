@@ -526,7 +526,8 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var v = 0.6 * vnoise(hit[0] / 90, hit[1] / 90) + 0.4 * vnoise(hit[0] / 310 + 17, hit[1] / 310)
         var dry = min(max((v - 0.5) * 2.5 - 2 * n[1] + 0.5, Float32(0)), Float32(1))
         var rock = min(max((0.8 - n[2]) * 4, Float32(0)), Float32(1)) * 0.6
-        base = base * (V3(0.88, 1.06, 0.9, 0) * (1 - dry) + V3(1.18, 1.04, 0.72, 0) * dry) * (1 - rock) + V3(0.4, 0.39, 0.36, 0) * (grain * rock)
+        var tint = V3(1, 1, 1, 0) if hb == 0 else V3(0.88, 1.06, 0.9, 0) * (1 - dry) + V3(1.18, 1.04, 0.72, 0) * dry  # scree stays grey
+        base = base * tint * (1 - rock) + V3(0.4, 0.39, 0.36, 0) * (grain * rock)
         col = light(cam, base * base, n, view, sh, ao * a[3], 0)
     var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
     var k = 0.006 * (0.6 + 0.5 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, a little thicker in valleys
