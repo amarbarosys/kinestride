@@ -37,6 +37,15 @@ comptime CLUMP_M = Float32(get_defined_int["LW_CLUMP", 80]())  # crowns are leaf
 comptime HMAX_M = Float32(40)  # tallest tree, the slot height scale and the ray's skip bound
 comptime HDR = 8  # world.bin header: N, sea, C, TN, max terrain height, then the offsets of cells (= HDR), slots, tail
 comptime CROWN = SIMD[DType.float32, 8](0.085, 0.25, 0.6, 0.13, 0.2, 0.22, 0, 0)
+comptime MESO_OCT = get_defined_int["LW_MESO_OCT", 4]()  # octaves of the 2-20 m layer: wavelengths 20, 10, 5, 2.5 m (SCALE.md section 3); 0 is the flat-world mutant
+comptime MESO_FLAT = Float32(get_defined_int["LW_MESO_FLAT_CM", 20]()) / 100  # amplitude of the 20 m octave in metres on flat ground
+comptime MESO_STEEP = Float32(get_defined_int["LW_MESO_STEEP_CM", 40]()) / 100  # and on a slope of MESO_S1 or more
+comptime MESO_S0 = Float32(0.08)  # the slope class ramps from flat (this slope) to steep (MESO_S1), rise over run
+comptime MESO_S1 = Float32(0.5)
+comptime MESO_EPS = Float32(1.5e-4)  # cells (3 mm): the ground search stops this close to the surface
+comptime MESO_DECAY = Float32(0.55)  # amplitude of each octave over the one before
+comptime MESO_SUM = (1 - MESO_DECAY ** MESO_OCT) / (1 - MESO_DECAY)  # the octaves' amplitudes over the first's: the layer is within this of the first octave's amplitude (each octave's noise is within 1)
+comptime MESO_PAD = MESO_STEEP * MESO_SUM  # metres: the layer's largest rise
 
 
 @always_inline
@@ -70,7 +79,8 @@ def cone_part(kind: Int, part: Int) -> F4:
 
 @always_inline
 def tree_at(T: Pointer[Float32, _], ti: Int, tj: Int) -> F8:
-    """Slot (ti, tj): (centre x, y, ground z, height, crown radius, kind) in terrain cells; kind -1 when empty."""
+    """Slot (ti, tj): (centre x, y, ground z, height, crown radius, kind) in terrain cells; kind -1 when empty. A tree stands on the macro ground
+    (the 2-20 m layer would cost a lookup per slot per ray step) and its trunk reaches MESO_PAD below it; a fern is small, so it takes the full ground."""
     var v = slot(T, ti, tj)
     var kind = Int(byte(v, 0)) - 1
     if kind < 0:
@@ -80,7 +90,7 @@ def tree_at(T: Pointer[Float32, _], ti: Int, tj: Int) -> F8:
     var y = (Float32(tj) + byte(v, 3) / 255) * tc
     var hh = byte(v, 1) / 255 * HMAX_M / T[2]
     var r = hh * CROWN[kind]  # crown radius / height, web/world.mjs SPECIES
-    return F8(x, y, lw_height(T, x, y), hh, r, Float32(kind), 0, 0)
+    return F8(x, y, lw_height(T, x, y) if kind == 2 else lw_macro(T, x, y), hh, r, Float32(kind), 0, 0)
 
 
 @always_inline
@@ -99,9 +109,9 @@ def ctl(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
 
 @always_inline
 def cap(T: Pointer[Float32, _], i: Int, j: Int) -> Float32:
-    """The upper bound of cell (i, j)'s ground: the maximum of its 16 controls."""
+    """The upper bound of cell (i, j)'s ground: the maximum of its 16 controls, and the 2-20 m layer's largest rise."""
     var n = Int(T[0])
-    return T[Int(T[7]) + 1 + n * n + (j & (n - 1)) * n + (i & (n - 1))]
+    return T[Int(T[7]) + 1 + n * n + (j & (n - 1)) * n + (i & (n - 1))] + MESO_PAD / T[2]
 
 
 @always_inline
@@ -141,11 +151,98 @@ def surf(c: F16, u: Float32, v: Float32) -> F4:
 
 
 @always_inline
-def lw_height(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
-    """Ground height at (x, y): the cell's bicubic patch."""
+def mesoh(ix: Int, iy: Int, k: Int) -> Float32:
+    """The lattice value of octave k at (ix, iy), in -1..1."""
+    var h = (UInt32(ix) * 73856093) ^ (UInt32(iy) * 19349663) ^ UInt32((k + 1) * 83492791)
+    h = (h ^ (h >> 15)) * 668265263
+    h = h ^ (h >> 13)
+    return Float32(h & 0xFFFF) / 32767.5 - 1
+
+
+@always_inline
+def meso_amp(T: Pointer[Float32, _], h0: Float32, g: Float32) -> Float32:
+    """The 20 m octave's amplitude in terrain cells where the macro ground has height h0 and slope g: MESO_FLAT to MESO_STEEP metres across
+    the slope class, fading to nothing at the sea so rivers and lakes keep their banks."""
+    var s = min(max((g - MESO_S0) / (MESO_S1 - MESO_S0), Float32(0)), Float32(1))
+    var a = MESO_FLAT + (MESO_STEEP - MESO_FLAT) * s * s * (3 - 2 * s)
+    var w = min(max((h0 - T[1]) * T[2] * 0.5, Float32(0)), Float32(1))  # metres over the sea, 2 m to full
+    return a * w * w * (3 - 2 * w) / T[2]
+
+
+@always_inline
+def meso(T: Pointer[Float32, _], amp: Float32, x: Float32, y: Float32) -> F4:
+    """The 2-20 m height layer at (x, y) in terrain cells, in cells: (height, d/dx, d/dy) of MESO_OCT octaves of lattice noise with spacing 1,
+    1/2, 1/4, 1/8 cell (wrapping like the torus), the first of amplitude amp, each MESO_DECAY of the one before (the amplitude's own
+    gradient is left out of the slopes)."""
+    var a = amp
+    var n = Int(T[0])
+    var sum = F4(0)
+    var f = Float32(1)
+    comptime for k in range(MESO_OCT):
+        var px = x * f
+        var py = y * f
+        var ix = Int(floor(px))
+        var iy = Int(floor(py))
+        var tx = px - Float32(ix)
+        var ty = py - Float32(iy)
+        var fx = tx * tx * tx * (tx * (tx * 6 - 15) + 10)
+        var fy = ty * ty * ty * (ty * (ty * 6 - 15) + 10)
+        var dx = 30 * tx * tx * (1 - tx) * (1 - tx)
+        var dy = 30 * ty * ty * (1 - ty) * (1 - ty)
+        var m = n * (1 << k) - 1
+        var a0 = mesoh(ix & m, iy & m, k)
+        var a1 = mesoh((ix + 1) & m, iy & m, k)
+        var b0 = mesoh(ix & m, (iy + 1) & m, k)
+        var b1 = mesoh((ix + 1) & m, (iy + 1) & m, k)
+        var e = a0 - a1 - b0 + b1
+        sum += F4(a0 + (a1 - a0) * fx + (b0 - a0) * fy + e * fx * fy, f * dx * ((a1 - a0) + e * fy), f * dy * ((b0 - a0) + e * fx), 0) * a
+        a *= MESO_DECAY
+        f *= 2
+    return sum
+
+
+@always_inline
+def surfm(T: Pointer[Float32, _], c: F16, i: Int, j: Int, u: Float32, v: Float32) -> F4:
+    """surf plus the 2-20 m layer at the cell's (u, v): (height, d/du, d/dv)."""
+    var q = surf(c, u, v)
+    comptime if MESO_OCT > 0:
+        q += meso(T, meso_amp(T, q[0], sqrt(q[1] * q[1] + q[2] * q[2])), Float32(i) + u, Float32(j) + v)
+    return q
+
+
+@always_inline
+def gap(T: Pointer[Float32, _], c: F16, i: Int, j: Int, ox: Float32, oy: Float32, o: F4, d: F4, t: Float32) -> F4:
+    """The ray's height over the cell's ground at t (the ray from o, its x and y relative to the cell as ox, oy), and the ground's slopes there.
+    The 2-20 m layer is within its bound of the macro patch, so it is added only where the ray is closer than that: the sign is all the search
+    needs elsewhere."""
+    var u = min(max(ox + t * d[0], Float32(0)), Float32(1))
+    var v = min(max(oy + t * d[1], Float32(0)), Float32(1))
+    var q = surf(c, u, v)
+    var f = o[2] + t * d[2] - q[0]
+    comptime if MESO_OCT > 0:
+        if abs(f) <= MESO_PAD / T[2]:
+            var a = meso_amp(T, q[0], sqrt(q[1] * q[1] + q[2] * q[2]))
+            if abs(f) <= a * MESO_SUM:
+                var m = meso(T, a, Float32(i) + u, Float32(j) + v)
+                f -= m[0]
+                q += m
+    return F4(f, q[1], q[2], 0)
+
+
+@always_inline
+def lw_macro(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
+    """Ground height at (x, y) without the 2-20 m layer: the cell's bicubic patch."""
     var i = Int(floor(x))
     var j = Int(floor(y))
     return surf(patch(T, i, j), x - Float32(i), y - Float32(j))[0]
+
+
+@always_inline
+def lw_height(T: Pointer[Float32, _], x: Float32, y: Float32) -> Float32:
+    """Ground height at (x, y): the cell's bicubic patch and the 2-20 m layer over it."""
+    var i = Int(floor(x))
+    var j = Int(floor(y))
+    return surfm(T, patch(T, i, j), i, j, x - Float32(i), y - Float32(j))[0]
 
 
 @always_inline
@@ -420,7 +517,8 @@ def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
             best = h
     var hue = Float32(((ti * 73856093) ^ (tj * 19349663)) & 1023) / 1023
     if kind != 2:  # the trunk: a thin cone to 0.9 H, material 9, species in the last lane (bark colour)
-        var tk = cone(o, d, F4(tr[0], tr[1], tr[2], 0), 0.012 * tr[3], 0.9 * tr[3])
+        var pad = MESO_PAD / T[2]  # the trunk reaches this far below the macro ground, where the layer is under it
+        var tk = cone(o, d, F4(tr[0], tr[1], tr[2] - pad, 0), 0.012 * (0.9 * tr[3] + pad) / 0.9, 0.9 * tr[3] + pad)
         if tk[0] < best[0]:
             return F8(tk[0], tk[1], tk[2], tk[3], 9, 0, hue, Float32(kind))
     return F8(best[0], best[1], best[2], best[3], Float32(3 + kind), Float32(1) if kind == 2 else Float32(0), hue, 0)
@@ -429,35 +527,44 @@ def tree(T: Pointer[Float32, _], ti: Int, tj: Int, o: F4, d: F4) -> F8:
 @always_inline
 def ground(T: Pointer[Float32, _], c: F16, i: Int, j: Int, o: F4, d: F4, t0: Float32, t1: Float32) -> F8:
     """The cell's patch c along the ray between t0 and t1: (t, analytic normal, material). The first sign change of the ray's height over
-    the patch on 4 samples, then 8 steps of false position."""
+    the patch on 4 samples, then up to 8 steps of false position."""
     var ox = o[0] - Float32(i)
     var oy = o[1] - Float32(j)
     var ta = t0
-    var fa = o[2] + ta * d[2] - surf(c, min(max(ox + ta * d[0], Float32(0)), Float32(1)), min(max(oy + ta * d[1], Float32(0)), Float32(1)))[0]
+    var fa = gap(T, c, i, j, ox, oy, o, d, ta)[0]
     for k in range(1, 5):
         var tb = t0 + (t1 - t0) * Float32(k) * 0.25
-        var fb = o[2] + tb * d[2] - surf(c, min(max(ox + tb * d[0], Float32(0)), Float32(1)), min(max(oy + tb * d[1], Float32(0)), Float32(1)))[0]
+        var fb = gap(T, c, i, j, ox, oy, o, d, tb)[0]
         if fa * fb <= 0 and tb > 0:
             var a = ta
             var b = tb
             var side = 0
+            var th = Float32(0)
+            var q = F4(0)
+            var done = False
             for _ in range(8):
                 var t = (a * fb - b * fa) / (fb - fa) if fb != fa else 0.5 * (a + b)
-                var ft = o[2] + t * d[2] - surf(c, min(max(ox + t * d[0], Float32(0)), Float32(1)), min(max(oy + t * d[1], Float32(0)), Float32(1)))[0]
-                if ft * fb > 0:
+                var g = gap(T, c, i, j, ox, oy, o, d, t)
+                if abs(g[0]) < MESO_EPS:  # each step may be a lookup of the 2-20 m layer: stop within 3 mm of the ground
+                    th = t
+                    q = g
+                    done = True
+                    break
+                if g[0] * fb > 0:
                     b = t
-                    fb = ft
+                    fb = g[0]
                     if side == -1:
                         fa *= 0.5
                     side = -1
                 else:
                     a = t
-                    fa = ft
+                    fa = g[0]
                     if side == 1:
                         fb *= 0.5
                     side = 1
-            var th = (a * fb - b * fa) / (fb - fa) if fb != fa else 0.5 * (a + b)
-            var q = surf(c, min(max(ox + th * d[0], Float32(0)), Float32(1)), min(max(oy + th * d[1], Float32(0)), Float32(1)))
+            if not done:
+                th = (a * fb - b * fa) / (fb - fa) if fb != fa else 0.5 * (a + b)
+                q = gap(T, c, i, j, ox, oy, o, d, th)
             var l = sqrt(q[1] * q[1] + q[2] * q[2] + 1)
             var water = o[2] + th * d[2] <= T[1] + 0.02
             return F8(th, -q[1] / l, -q[2] / l, 1 / l, Float32(2) if water else Float32(1), 0, 0, 0)
