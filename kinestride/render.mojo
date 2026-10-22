@@ -476,7 +476,7 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var g = h[5] * cam[30]
         var sp = mat - 3
         var leaf = V3(0.08, 0.24, 0.12, 0) if sp == 0 else (V3(0.16, 0.3, 0.08, 0) if sp == 1 else (V3(0.06, 0.2, 0.08, 0) if sp == 2 else (V3(0.3, 0.42, 0.12, 0) if sp == 3 else (V3(0.2, 0.28, 0.1, 0) if sp == 4 else V3(0.17, 0.24, 0.16, 0)))))
-        var base = leaf * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g
+        var base = leaf * V3(0.92 + 0.16 * h[6], 1, 1.08 - 0.16 * h[6], 0) * (1 - g) + V3(0.3 + 0.7 * h[6], 1 - 0.5 * h[6], 0.9, 0) * g  # hue per tree
         var leaf_n = n
         if mat == 9:  # bark: birch white-grey, the rest brown, a little variation per tree
             base = (V3(0.72, 0.7, 0.64, 0) if Int(h[7]) == 3 else V3(0.3, 0.21, 0.14, 0)) * (0.85 + 0.3 * h[6])
@@ -504,6 +504,11 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var canopy = far * min(max((0.32 - a[1]) * 6, Float32(0)), Float32(1)) * Float32(1 - get_defined_int["LW_NOCANOPY", 0]())  # dark green: a stand's crowns
         grain = grain * (1 - canopy) + canopy * (0.55 + 0.9 * vnoise(hit[0] * 0.17, hit[1] * 0.17) * vnoise(hit[0] * 0.5 + 7, hit[1] * 0.5))  # 6 m crowns, gaps
         var base = V3(a[0], a[1], a[2], 0) * grain
+        # 50-300 m patches: dry yellow-green to lush green, drier on slopes facing -y, bare rock where steep
+        var v = 0.6 * vnoise(hit[0] / 90, hit[1] / 90) + 0.4 * vnoise(hit[0] / 310 + 17, hit[1] / 310)
+        var dry = min(max((v - 0.5) * 2.5 - 2 * n[1] + 0.5, Float32(0)), Float32(1))
+        var rock = min(max((0.8 - n[2]) * 4, Float32(0)), Float32(1)) * 0.6
+        base = base * (V3(0.88, 1.06, 0.9, 0) * (1 - dry) + V3(1.18, 1.04, 0.72, 0) * dry) * (1 - rock) + V3(0.4, 0.39, 0.36, 0) * (grain * rock)
         col = light(cam, base * base, n, view, sh, ao * a[3], 0)
     var d = h[0] * sqrt(dot(ray, ray)) / cam[16]  # world units, as the web's fog
     var k = 0.006 * (0.6 + 0.5 * exp(-(u[2] - pf[LWO + 1]) / 3))  # per 20 m cell: haze visibility about 10 km, a little thicker in valleys
