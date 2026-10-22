@@ -623,8 +623,9 @@ def light(cam: TCAM, albedo: V3, n: V3, view: V3, sh: Float32, ao: Float32, spec
     var lc = V3(0.80, 0.76, 0.70, 0)
     comptime if LIVING:  # the web's palette: ambient from the sky by elevation, warm sun by day, blue moon by night
         var day = 1 - cam[30]
-        amb = (V3(cam[20], cam[21], cam[22], 0) * (0.5 + 0.5 * n[2]) + V3(0.20, 0.17, 0.13, 0) * (0.5 - 0.5 * n[2]) * day) * ((0.25 + 0.75 * day) * ao)
         lc = V3(1, 0.95 - 0.25 * cam[31], 0.85 - 0.4 * cam[31], 0) * day + V3(0.05, 0.07, 0.16, 0) * cam[30]
+        var bounce = sqrt(albedo) * lc * (0.7 * max(sun(cam)[2], Float32(0)))  # sunlit ground of this surface's colour lights it from below
+        amb = (V3(cam[20], cam[21], cam[22], 0) * (0.5 + 0.5 * n[2]) + bounce * (0.5 - 0.5 * n[2])) * ((0.25 + 0.75 * day) * ao)
     var col = albedo * (amb + lc * (ndl * sh))
     if spec > 0 and ndl > 0:
         var h = max(dot(n, unit(sun(cam) - view)), Float32(0))
