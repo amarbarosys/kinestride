@@ -23,7 +23,7 @@ triangles over each step and the cones of the 5 x 5 slots around it; beyond, it 
 alder, pine).
 """
 from std.sys import get_defined_int
-from std.math import asin, atan2, cos, floor, pi, sin, sqrt
+from std.math import asin, atan2, cos, exp, floor, pi, sin, sqrt
 from std.memory import bitcast
 
 comptime F4 = SIMD[DType.float32, 4]
@@ -665,16 +665,84 @@ def lw_lit(T: Pointer[Float32, _], x: Float32, y: Float32, sun_el: Float32, az8:
     return min(max((sun_el - hz / 255 * 1.5707963) / 0.08 + 0.5, Float32(0)), Float32(1))
 
 
+def sun_at(t: Float32) -> F4:
+    """The sun's unit direction at time t (s; one day = 150 s, midnight at 0, so it rises at 6 h and sets at 18 h)."""
+    var a = t / 150 * 2 * pi - pi / 2
+    var s = F4(cos(a) * 0.6, cos(a) * 0.4, sin(a), 0)
+    return s / sqrt((s * s).reduce_add())
+
+
+def lw_pl(h: Float32, lo: Float32, hi: Float32) -> Float32:
+    """Air temperature at hour h of a day with minimum lo and maximum hi under the game's sun (up 6-18 h): Parton and Logan
+    (1981), 1.5 m air (a 1.86 h, b 2.2, c -0.17 h): a sine from the minimum (sunrise + c) to sunset, then exponential decay,
+    normalised here to reach the next minimum, so the curve is continuous."""
+    var m = (h - 5.83 + 24) % 24  # hours since the minimum
+    if m <= 12.17:
+        return lo + (hi - lo) * sin(pi * m / 15.72)
+    var e = exp(-2.2 / 12 * (m - 12.17))
+    var e1 = exp(Float32(-2.2 / 12 * 11.83))
+    return lo + (hi - lo) * Float32(sin(pi * 12.17 / 15.72)) * (e - e1) / (1 - e1)  # from the sunset value down to lo
+
+
+def wind_chill(t: Float32, u: Float32) -> Float32:
+    """Felt temperature (C) at air t (C) and 10 m wind u (m/s): the NWS/MSC 2001 wind chill, valid at t <= 10 C and over
+    4.8 km/h; the air itself otherwise."""
+    var v = u * 3.6
+    if t > 10 or v <= 4.8:
+        return t
+    var p = v ** 0.16
+    return 13.12 + 0.6215 * t - 11.37 * p + 0.3965 * t * p
+
+
+def lw_temp(T: Pointer[Float32, _], x: Float32, y: Float32, t: Float32, doy: Float32, cloud: Float32, clim: F8) -> F8:
+    """Air temperature at (x, y) cells, 1.5 m up, at time t (s, sky_cam's clock) on day of year doy under cloud cover 0..1.
+    clim (game/climate.mojo, fitted to Open-Meteo normals): mean C at height 0, its annual amplitude K and warmest day, the
+    diurnal range K, its amplitude and widest day, the mean 10 m wind m/s. Returns (air C, felt C, wind m/s, cold pool K,
+    slope sun K, daily mean C, diurnal range K, height over the 300 m ring m).
+    Terms: lapse 6.5 K/km; annual harmonics; Parton-Logan day (lw_pl), the range cut by cloud (Dai et al. 1999: up to 60 %),
+    by water within 300 m (half) and under a canopy (30 %); cold air pooling in hollows on clear calm nights, 0.04 K per metre
+    below the ring mean up to 100 m; slopes facing the sun warmer than flat ground by up to 3 K per unit of extra beam;
+    ridge speed-up of the wind (Taylor and Lee 1984, 3-D hill: 0.8 H / L); NWS wind chill."""
+    var cm = T[2]
+    var z = lw_height(T, x, y) * cm
+    var w = Float32(2 * pi / 365.25)
+    var td = clim[0] + clim[1] * cos(w * (doy - clim[2])) - 0.0065 * z
+    var dtr = clim[3] + clim[4] * cos(w * (doy - clim[5]))
+    var r = 300 / cm
+    var ring = Float32(0)
+    var wet = Float32(0)
+    for k in range(16):
+        var a = Float32(k) * pi / 8
+        var h = lw_height(T, x + r * cos(a), y + r * sin(a))
+        ring += h
+        wet += Float32(1) if h <= T[1] + 0.02 else Float32(0)
+    var rel = z - ring / 16 * cm
+    var u = clim[6] * (1 + 0.8 * max(rel, Float32(0)) / 300)
+    var forest = lw_tree_near(T, x, y, 0)
+    dtr *= (1 - 0.6 * cloud) * (1 - 0.5 * wet / 16) * (Float32(0.7) if forest else Float32(1))
+    var air = lw_pl((t % 150) / 150 * 24, td - dtr / 2, td + dtr / 2)
+    var calm = (1 - cloud) * min(max(1 - u / 5, Float32(0)), Float32(1))
+    var pool = -0.04 * min(max(-rel, Float32(0)), Float32(100)) * calm * min(max((td + dtr / 2 - air) / max(dtr, 0.1), Float32(0)), Float32(1))
+    var s = sun_at(t)
+    var dsun = Float32(0)
+    if s[2] > 0 and not forest:
+        var e = Float32(0.05)
+        var n = F4(lw_height(T, x - e, y) - lw_height(T, x + e, y), lw_height(T, x, y - e) - lw_height(T, x, y + e), 2 * e, 0)
+        n /= sqrt((n * n).reduce_add())
+        var lit = lw_lit(T, x, y, asin(s[2]), (atan2(s[1], s[0]) / (2 * pi) * 8 + 8) % 8)
+        dsun = 3 * (1 - cloud) * (lit * max((n * s).reduce_add(), Float32(0)) - s[2])
+    air += pool + dsun
+    return F8(air, wind_chill(air, u), u, pool, dsun, td, dtr, rel)
+
+
 def sky_cam(mut c: List[Float32], t: Float32, m: Float32):
     """cam[16:32] for render.mojo LIVING=1 at time t (s; one day = 150 s, the web's sky(t)): metres per unit, light dir
     (sun, or the moon below the horizon), zenith and horizon colours, exposure, t, light elevation, azimuth in eighths,
     night, dusk."""
-    var a = t / 150 * 2 * pi - pi / 2
-    var sx = cos(a) * 0.6
-    var sy = cos(a) * 0.4
-    var sz = sin(a)
-    var l = sqrt(sx * sx + sy * sy + sz * sz)
-    sx /= l; sy /= l; sz /= l
+    var s = sun_at(t)
+    var sx = s[0]
+    var sy = s[1]
+    var sz = s[2]
     var day = min(max(sz * 4 + 0.35, Float32(0)), Float32(1))
     var dusk = min(max(1 - abs(sz) * 5, Float32(0)), Float32(1)) * min(day * 3, Float32(1))
     var g = Float32(1) if sz > -0.05 else Float32(-1)

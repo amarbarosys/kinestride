@@ -456,13 +456,18 @@ def atmosphere(cam: TCAM, view: V3) -> V3:
 
 
 @always_inline
-def cloud(cam: TCAM, x: Float32, y: Float32) -> Float32:
-    """Cover 0..1 of the cloud layer over (x, y) m: three value-noise octaves from 600 m to 80 m (ragged edges), drifting
-    with the wind (cam[27] s)."""
-    var u = (x + cam[27] * 8) / 600
-    var v = (y + cam[27] * 3) / 600
+def cloud_at(x: Float32, y: Float32, t: Float32) -> Float32:
+    """Cover 0..1 of the cloud layer over (x, y) m at time t (s): three value-noise octaves from 600 m to 80 m (ragged
+    edges), drifting with the wind. Plain floats, so the host (living.mojo lw_temp's caller) reads the same sky."""
+    var u = (x + t * 8) / 600
+    var v = (y + t * 3) / 600
     var c = 0.55 * vnoise(u, v) + 0.3 * vnoise(u * 2.7 + 5, v * 2.7) + 0.15 * vnoise(u * 7.3 + 11, v * 7.3)
     return min(max((c - 0.5) * 5, Float32(0)), Float32(1))
+
+
+@always_inline
+def cloud(cam: TCAM, x: Float32, y: Float32) -> Float32:
+    return cloud_at(x, y, cam[27])
 
 
 @always_inline

@@ -217,3 +217,12 @@ Step D2 (2026-10-22, lane-detail): ground props. A hash of each 5 m tree-grid ce
 Step D6 (2026-10-22, lane-detail): shorelines, from height and `T[1]` alone (0 B). Ground 0-3 m over the sea is wet sand: darker (up to 40 percent) and a touch cooler, wettest at the line. Water is tinted by its depth (sea minus bed): shallows lighter and greener, deep water darker. A foam line sits where the bed is within about one metre along the slope of the waterline (breathing 0.5-1.3 m with a travelling sine and noise), only where the bed is under 0.3 m deep, so a flat lake bed gets none; it fades out by 300 m. Cost: gate 2.33 -> 2.37 ms (3 rounds, +0.05 ms).
 
 Step D5 (2026-10-22, lane-detail): trail ribbons. world.bin gains a tail (the trails as 3,072 uint16 vertices, +12,324 B, layout in the header of living.mojo and tools/export_bin.mjs); its ground colour no longer carries the trail tint, the habitat word's fraction carries the level. `lw_ctrl` appends a per-cell segment index; `trail_d` is the distance to the nearest indexed segment (2 m reach). The ground shader tints the 20 m cells (level, bilinear) from 40 m out and draws the 1.2 m ribbon with a 0.4 m soft edge within 100 m, crossfading between 60 and 100 m; `prop_at` skips a position within 0.9 m + its size of a trail. Host table +96,328 B (the index). Cost: gate 2.37 -> 2.37 ms (3 rounds, median +0.00, worst round +0.04). Review shot 11 stands on a trail (`WALK_TRAIL="x y tx ty"` pins its view for a prev arm).
+
+Air temperature (2026-10-22, branch `temperature`): `lw_temp` in living.mojo gives the air 1.5 m up at any point and time, on
+the host (0 B, 0 GPU ms; about 25 `lw_height` reads per call). Terms: lapse 6.5 K/km; the climate's annual harmonics (mean
+and diurnal range, fitted to Open-Meteo normals by living-world `tools/climate.mjs`); the Parton and Logan (1981) day curve
+for 1.5 m air (`lw_pl`, normalised at night so it is continuous) under the game's sun (`sun_at`, up 6-18 h); the day's
+range cut by cloud (up to 60 percent), by water within 300 m and under a canopy; cold-air pools in hollows on clear calm
+nights (0.04 K per metre below the 300 m ring mean, to 100 m); slope sun from the analytic normal and the baked horizon
+(up to 3 K); ridge wind speed-up (Taylor and Lee 1984, 0.8 H / L); the NWS 2001 wind chill (`wind_chill`). `cloud_at` in
+render.mojo is the cloud cover as plain floats, so the host reads the sky the renderer draws.
