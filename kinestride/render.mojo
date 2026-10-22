@@ -68,20 +68,26 @@ comptime NEAR = Float32(1e-3)
 
 comptime LVIS = row_major[W * H]()
 comptime LPI = row_major[5 * NPART]()
-comptime LPF = row_major[PFS * NPART + get_defined_int["LIVING", 0]() * 8]()  # parts, then the world header; the table runs on past it (LWF)
+comptime NBIRD = 9  # gulls (the page's flock)
+comptime BGP = 48  # outline points of a gull; the outline is BGP - 2 = NTB triangles (the host's strip between its two edges)
+comptime NTB = BGP - 2
+comptime BLK = get_defined_int["LIVING", 0]() * (2 * BGP + 3 * NTB)  # LIVING: the gull's outline after the parts, written once: x, y (m) of its BGP points, then the point indices of its NTB triangles
+comptime LWO = PFS * NPART + BLK  # where the world table starts in pf
+comptime LPF = row_major[LWO + get_defined_int["LIVING", 0]() * 8]()  # parts, the flock, then the world header; the table runs on past it (LWF)
 comptime RVI = 9  # int16 per vertex in rv.bin: position 3, unit normal x 32767 3, rgb 0..255 3 (callers load 2 * RVI * NRV bytes)
 comptime LRV = row_major[NRV * RVI]()  # all positions, then all normals, then all colours
 comptime LRT = row_major[NRT]()
 comptime LRP = row_major[NTRI]()
 comptime LPOSE = row_major[PROWS * F]()
-comptime NCAM = 16 + NP  # eye 3, target 3, fovy, focal, ..., [10] grid spacing; [16:] world.mojo terrain params
+comptime CAMB = 16 + NP  # LIVING: per gull, from cam[CAMB]: centre x y z (m), heading x y, flap, 2 spare
+comptime NCAM = CAMB + get_defined_int["LIVING", 0]() * 8 * NBIRD  # eye 3, target 3, fovy, focal, ..., [10] grid spacing; [16:] world.mojo terrain params
 comptime LCAM = row_major[NCAM]()
 comptime SOIL = get_defined_int["SOIL", 0]() == 1  # play: soil and moss on the terrain instead of the grey checker (gates keep the checker)
 comptime TERRAIN = get_defined_int["TERRAIN", 0]()  # 1: the ground is world.mojo's terrain (cam[16:24]), not z = 0
 comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's endless city, 1 unit = 1 m (cam[16:20]: seed, origin cell x y, far m)
 comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
 comptime LWF = 8 if LIVING else 0  # world floats the layout covers: the header only. The table is as long as world.bin, read through T = pf + LWO
-comptime LWO = PFS * NPART  # where the world table starts in pf
+comptime BIRD0 = PFS * NPART  # where the gull outline starts in pf
 comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in cells per 128 of the world's N (125 x 20 m = 2.5 km at N 128, SCALE.md)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
@@ -186,10 +192,84 @@ def clear(vis: TVIS):
         vis[i] = EMPTY
 
 
-def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, base: Int32, mode: Int32):
-    """Into vis at offset base: mode 0 the opaque parts, 1 the see-through parts (alpha < 1) only, 2 the opaque parts mirrored in z = 0."""
+@always_inline
+def fill(vis: TVIS, base: Int32, id: UInt64, sx: V3, sy: V3, sz: V3):
+    """The triangle (screen x, y, 1 / view z per corner) into vis at offset base: edge functions over its pixel box, 64-bit atomic min of
+    (depth bits << 32 | id)."""
+    var area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0])
+    if abs(area) < 1e-12:
+        return
+    var x0 = max(Int(min(sx[0], min(sx[1], sx[2]))), 0)
+    var x1 = min(Int(max(sx[0], max(sx[1], sx[2]))) + 1, W - 1)
+    var y0 = max(Int(min(sy[0], min(sy[1], sy[2]))), 0)
+    var y1 = min(Int(max(sy[0], max(sy[1], sy[2]))) + 1, H - 1)
+    for y in range(y0, y1 + 1):
+        var py = Float32(y) + 0.5
+        for x in range(x0, x1 + 1):
+            var px = Float32(x) + 0.5
+            var w0 = ((sx[2] - sx[1]) * (py - sy[1]) - (sy[2] - sy[1]) * (px - sx[1])) / area
+            var w1 = ((sx[0] - sx[2]) * (py - sy[2]) - (sy[0] - sy[2]) * (px - sx[2])) / area
+            var w2 = 1 - w0 - w1
+            if w0 < 0 or w1 < 0 or w2 < 0:
+                continue
+            var depth = 1 / (w0 * sz[0] + w1 * sz[1] + w2 * sz[2])
+            var key = UInt64(depth.to_bits()) << 32 | id
+            _ = Atomic.min[ordering=Ordering.RELAXED](vis.ptr.unsafe_offset(Int(base) + y * W + x), key)
+
+
+@always_inline
+def bird_vertex(pf: TPF, cam: TCAM, b: Int, k: Int) -> V3:
+    """World position (m) of outline point k of gull b. The host writes each gull's state (centre, heading,
+    flap) into cam every frame and the outline into pf once; the wings lift with |x| times the flap, as the page's gulls."""
+    var s = CAMB + 8 * b
+    var o = BIRD0 + 2 * k
+    var x = pf[o]
+    var y = pf[o + 1]
+    var fx = cam[s + 3]
+    var fy = cam[s + 4]
+    return V3(cam[s] + x * fy + y * fx, cam[s + 1] - x * fx + y * fy, cam[s + 2] + abs(x) * 0.55 * cam[s + 5], 0)
+
+
+comptime BIRDF = UInt64((1 << (32 - TB)) - 2)  # the animal field of a gull's key: no animal and not EMPTY's all ones; the triangle field holds gull * NTB + triangle
+
+
+@always_inline
+def isbird(key: UInt64) -> Bool:
+    comptime if LIVING:
+        return key != EMPTY and ((key >> TB64) & ((UInt64(1) << UInt64(32 - TB)) - 1)) == BIRDF
+    return False
+
+
+@always_inline
+def birdcol(cam: TCAM) -> V3:
+    """Gull ink, linear: dark by day, pale by night (the page's colours)."""
+    var n = min(max((cam[30] - 0.4) / 0.6, Float32(0)), Float32(1))
+    var c = V3(0.08, 0.08, 0.1, 0) * (1 - n) + V3(0.75, 0.8, 0.95, 0) * n
+    return c * c
+
+
+def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, base: Int32, mode: Int32, birds: Int32):
+    """Into vis at offset base: mode 0 the opaque parts, 1 the see-through parts (alpha < 1) only, 2 the opaque parts mirrored in z = 0.
+    birds 1 (LIVING, the view camera): the threads past the animals' triangles draw the flock, NBIRD x NTB triangles."""
     var idx = Int(block_idx.x * block_dim.x + thread_idx.x)
     if idx >= F * NTRI:
+        comptime if LIVING:
+            var k = idx - F * NTRI
+            if birds == 1 and k < NBIRD * NTB:
+                var c = camera(cam)
+                var sx = V3(0)
+                var sy = V3(0)
+                var sz = V3(0)
+                for j in range(3):
+                    var w = bird_vertex(pf, cam, k // NTB, Int(pf[BIRD0 + 2 * BGP + 3 * (k % NTB) + j]))
+                    var d = w - c[0]
+                    var z = dot(d, c[3])
+                    if z < NEAR:
+                        return
+                    sx[j] = Float32(W) * 0.5 + c[4] * dot(d, c[1]) / z
+                    sy[j] = Float32(H) * 0.5 - c[4] * dot(d, c[2]) / z
+                    sz[j] = 1 / z
+                fill(vis, base, BIRDF << TB64 | UInt64(k), sx, sy, sz)
         return
     var f = idx // NTRI
     var t = idx % NTRI
@@ -213,26 +293,7 @@ def raster(vis: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, 
         sx[k] = Float32(W) * 0.5 + c[4] * dot(d, c[1]) / z
         sy[k] = Float32(H) * 0.5 - c[4] * dot(d, c[2]) / z
         sz[k] = 1 / z
-    var area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (sy[1] - sy[0])
-    if abs(area) < 1e-12:
-        return
-    var x0 = max(Int(min(sx[0], min(sx[1], sx[2]))), 0)
-    var x1 = min(Int(max(sx[0], max(sx[1], sx[2]))) + 1, W - 1)
-    var y0 = max(Int(min(sy[0], min(sy[1], sy[2]))), 0)
-    var y1 = min(Int(max(sy[0], max(sy[1], sy[2]))) + 1, H - 1)
-    var id = UInt64(f << TB | t)
-    for y in range(y0, y1 + 1):
-        var py = Float32(y) + 0.5
-        for x in range(x0, x1 + 1):
-            var px = Float32(x) + 0.5
-            var w0 = ((sx[2] - sx[1]) * (py - sy[1]) - (sy[2] - sy[1]) * (px - sx[1])) / area
-            var w1 = ((sx[0] - sx[2]) * (py - sy[2]) - (sy[0] - sy[2]) * (px - sx[2])) / area
-            var w2 = 1 - w0 - w1
-            if w0 < 0 or w1 < 0 or w2 < 0:
-                continue
-            var depth = 1 / (w0 * sz[0] + w1 * sz[1] + w2 * sz[2])
-            var key = UInt64(depth.to_bits()) << 32 | id
-            _ = Atomic.min[ordering=Ordering.RELAXED](vis.ptr.unsafe_offset(Int(base) + y * W + x), key)
+    fill(vis, base, UInt64(f << TB | t), sx, sy, sz)
 
 
 @always_inline
@@ -814,6 +875,20 @@ def animal(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
 
 
 @always_inline
+def key_hit(pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3, key: UInt64) -> V3:
+    """tri_hit of the triangle a vis key names (an animal's or a gull's) against ray."""
+    if isbird(key):
+        var k = Int(key & TMASK)
+        var o = BIRD0 + 2 * BGP + 3 * (k % NTB)
+        return tri_hit(eye, ray, bird_vertex(pf, cam, k // NTB, Int(pf[o])), bird_vertex(pf, cam, k // NTB, Int(pf[o + 1])), bird_vertex(pf, cam, k // NTB, Int(pf[o + 2])))
+    var f = Int(key >> TB64) & ((1 << (32 - TB)) - 1)
+    var t = Int(key & TMASK)
+    var p = Int(rp[t])
+    return tri_hit(eye, ray, vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t), vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + 1),
+                   vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + 2))
+
+
+@always_inline
 def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, cam: TCAM, eye: V3, ray: V3,
            key: UInt64, tt: Float32, ao: Float32, mk: UInt64, h0: SIMD[DType.float32, 8] = SIMD[DType.float32, 8](-1)) -> V3:
     """Linear colour along ray: the animal triangle key at ray parameter tt when it is nearer than the ground,
@@ -822,6 +897,8 @@ def sample(sm: TVIS, pi: TPI, pf: TPF, rv: TRV, rt: TRT, rp: TRP, pose: TPOSE, c
     comptime if LIVING:
         var h = h0 if h0[0] >= 0 else living(cam, pf, eye, ray)
         if key != EMPTY and tt < h[0]:
+            if isbird(key):
+                return birdcol(cam) * cam[26]
             return animal(sm, pi, pf, rv, rt, rp, pose, cam, eye, ray, key, tt, ao, False) * cam[26]
         return meadow(sm, pf, cam, eye, ray, h, ao) if h[0] < 3.4e38 else living_sky(cam, pf, unit(ray)) * cam[26]
     comptime if CITY:
@@ -893,7 +970,7 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
     var z0 = depth(key) if front else g[0] * c[4]
     var mk = sm.ptr.unsafe_offset(OMR + i)[] if REFLECT else EMPTY
     var glass = gk != EMPTY and depth(gk) < z0
-    var fly = (front and pi[5 * Int(rp[Int(key & TMASK)])] > 0) or glass  # alpha: animal parts only (not world parts)
+    var fly = (front and (isbird(key) or pi[5 * Int(rp[Int(key & TMASK)])] > 0)) or glass  # alpha: animal parts only (not world parts)
     var ao = occlusion(vis, i, z0, c[4]) if z0 < 3.4e38 else Float32(1)
     var col = sample(sm, pi, pf, rv, rt, rp, pose, cam, c[0], ray, key, depth(key) / c[4], ao, mk, h)
     comptime if AA:
@@ -924,11 +1001,7 @@ def shade(vis: TVIS, sm: TVIS, img: TIMG, low: TLOW, pi: TPI, pf: TPF, rv: TRV, 
                         var kk = vis[l * W + j]
                         if kk == EMPTY or kk == bkey:
                             continue
-                        var f = Int(kk >> TB64) & ((1 << (32 - TB)) - 1)
-                        var t = Int(kk & TMASK)
-                        var p = Int(rp[t])
-                        var h = tri_hit(c[0], rs, vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t), vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + 1),
-                                        vertex(pi, pf, rv, rt, pose, cam, f, p, 3 * t + 2))
+                        var h = key_hit(pi, pf, rv, rt, rp, pose, cam, c[0], rs, kk)
                         if h[0] < best:
                             best = h[0]
                             bkey = kk
@@ -1113,18 +1186,18 @@ def frame(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[clea
           trp: TRP, tpose: TPOSE, tcam: TCAM, tscam: TCAM) raises:
     """One frame's passes on the card: aux layers cleared, (SHADOW=2) sun camera + shadow map, view raster, (GLASS) the
     see-through layer, (REFLECT) the mirror layer; shade."""
-    var g = (F * NTRI + 255) // 256
+    var g = (F * NTRI + NBIRD * NTB + 255) // 256  # + the flock's triangles, drawn by the view raster
     comptime if NAUX > 0:
         ctx.enqueue_function(kcs, sm, tcam, grid_dim=(NAUX + 255) // 256, block_dim=256)
     comptime if SHADOW == 2:
         ctx.enqueue_function(ksc, tcam, tscam, grid_dim=1, block_dim=1)
-        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tscam, Int32(0), Int32(0), grid_dim=g, block_dim=256)
+        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tscam, Int32(0), Int32(0), Int32(0), grid_dim=g, block_dim=256)
     ctx.enqueue_function(kc, vis, grid_dim=(W * H + 255) // 256, block_dim=256)
-    ctx.enqueue_function(kr, vis, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(0), Int32(0), grid_dim=g, block_dim=256)
+    ctx.enqueue_function(kr, vis, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(0), Int32(0), Int32(1), grid_dim=g, block_dim=256)
     comptime if GLASS:
-        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OGL), Int32(1), grid_dim=g, block_dim=256)
+        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OGL), Int32(1), Int32(0), grid_dim=g, block_dim=256)
     comptime if REFLECT:
-        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), grid_dim=g, block_dim=256)
+        ctx.enqueue_function(kr, sm, tpi, tpf, trv, trt, trp, tpose, tcam, Int32(OMR), Int32(2), Int32(0), grid_dim=g, block_dim=256)
     ctx.enqueue_function(ks, vis, sm, img, low, tpi, tpf, trv, trt, trp, tpose, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
     comptime if LIVING:
         ctx.enqueue_function(ku, vis, sm, img, low, tcam, grid_dim=(W * H + 255) // 256, block_dim=256)
@@ -1191,6 +1264,7 @@ def main() raises:
     var pi_h = load(rdir + "rmi.bin", 20 * NPART)
     var pf_h = load(rdir + "rmf.bin", 4 * PFS * NPART)
     comptime if LIVING:  # the world table rides behind the parts (LWO); path from LIVING_BIN
+        pf_h += List[UInt8](length=4 * BLK, fill=0)  # no flock in this tool
         pf_h += open(String(getenv("LIVING_BIN")), "r").read_bytes()
     var rv_h = load(rdir + "rv.bin", 2 * RVI * NRV)
     var rt_h = load(rdir + "rt.bin", 2 * NRT)
