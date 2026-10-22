@@ -438,11 +438,12 @@ def atmosphere(cam: TCAM, view: V3) -> V3:
 
 @always_inline
 def cloud(cam: TCAM, x: Float32, y: Float32) -> Float32:
-    """Cover 0..1 of the cloud layer over (x, y) m: two value-noise octaves at 600 m, drifting with the wind (cam[27] s)."""
+    """Cover 0..1 of the cloud layer over (x, y) m: three value-noise octaves from 600 m to 80 m (ragged edges), drifting
+    with the wind (cam[27] s)."""
     var u = (x + cam[27] * 8) / 600
     var v = (y + cam[27] * 3) / 600
-    var c = 0.65 * vnoise(u, v) + 0.35 * vnoise(u * 2.7 + 5, v * 2.7)
-    return min(max((c - 0.5) * 4, Float32(0)), Float32(1))
+    var c = 0.55 * vnoise(u, v) + 0.3 * vnoise(u * 2.7 + 5, v * 2.7) + 0.15 * vnoise(u * 7.3 + 11, v * 7.3)
+    return min(max((c - 0.5) * 5, Float32(0)), Float32(1))
 
 
 @always_inline
@@ -461,7 +462,7 @@ def living_sky(cam: TCAM, view: V3) -> V3:
         var cc = cloud(cam, cam[0] + view[0] * t, cam[1] + view[1] * t) * exp(-t / 40000)
         var hz = V3(cam[23], cam[24], cam[25], 0)
         var lit = hz * hz * 0.5 + V3(1, 0.95, 0.88, 0) * (0.9 * max(sun(cam)[2], Float32(0)) * (1 - cam[30]))
-        c = c * (1 - cc) + lit * ((1.15 - 0.4 * cc) * cc)
+        c = c * (1 - cc) + lit * ((1.2 - 0.6 * cc) * cc)  # thick cover has a darker base
     return c
 
 
