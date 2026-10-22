@@ -36,7 +36,7 @@ from max.gpu.host import DeviceContext
 from layout import TileTensor, row_major
 from world import NP, PW, height_grad
 from city import city_hit
-from living import cell, lw_albedo, lw_hit, lw_lit, lw_trail, sky_cam, trail_d
+from living import cell, lw_albedo, lw_hit, lw_lit, lw_trail, rnd, sky_cam, trail_d
 
 comptime W = get_defined_int["W", 1920]()
 comptime H = get_defined_int["H", 1080]()
@@ -570,10 +570,39 @@ def meadow(sm: TVIS, pf: TPF, cam: TCAM, eye: V3, ray: V3, h: SIMD[DType.float32
         var wetg = min(max(1 - (u[2] - T[1]) * cam[16] / 3, Float32(0)), Float32(1))  # 0-3 m over the sea: wet sand, darker and a touch cooler, wettest at the line
         base = base * (1 - 0.4 * wetg * wetg) * V3(1 - 0.08 * wetg, 1 - 0.02 * wetg, 1 + 0.04 * wetg, 0)
         var tr = lw_trail(T, u[0], u[1]) * 0.85 * min(max((dm - 40) / 60, Float32(0)), Float32(1))  # trails: the 20 m cell tint from 40 m out, packed earth ribbon (1.2 m, soft edge) within 100 m
+        var rb = Float32(0)
         if dm < 100:
-            var rb = min(max((0.85 - trail_d(T, u[0], u[1]) * cam[16]) / 0.4, Float32(0)), Float32(1))
+            rb = min(max((0.85 - trail_d(T, u[0], u[1]) * cam[16]) / 0.4, Float32(0)), Float32(1))
             tr = max(tr, rb * rb * (3 - 2 * rb) * 0.95 * min(max((100 - dm) / 40, Float32(0)), Float32(1)))
         base = base * (1 - tr) + V3(0.5, 0.42, 0.3, 0) * (grain * tr)
+        if (hb == 2 or hb == 4) and dm < 30 and n[2] > 0.5:  # blades, meadow 0.38 m and heather 0.26 m: 7 shells over the ground on a 6 cm grid within 30 m, thinned out by 18-30 m
+            var cover = min((30 - dm) / 12, Float32(1)) * (1 - rb) * (1 - wetg)
+            var hg = Float32(0.38) if hb == 2 else Float32(0.26)
+            var back = max(-dot(view, n), Float32(0.15))
+            var tb = Float32(-1)  # height of the hit as a fraction of its blade
+            var hue = Float32(0)
+            for k in range(7):
+                var hh = hg * Float32(7 - k) / 7
+                var sk = min(hh / back, Float32(2))
+                var qx = hit[0] - view[0] * sk
+                var qy = hit[1] - view[1] * sk
+                var ix = Int(floor(qx * 16.667))
+                var iy = Int(floor(qy * 16.667))
+                var hs = (ix * 73856093) ^ (iy * 19349663)
+                var hb2 = hg * (0.45 + 0.55 * rnd(hs, 0))  # this blade's height
+                if hb2 > hh and rnd(hs, 1) < cover:
+                    var lean = 0.07 * (hh / hb2) * (hh / hb2) * sin(cam[27] * 1.4 + qx * 0.35 + qy * 0.2)  # wind from cam[27]
+                    var dx = qx - (Float32(ix) + 0.2 + 0.6 * rnd(hs, 2)) * 0.06 - lean
+                    var dy = qy - (Float32(iy) + 0.2 + 0.6 * rnd(hs, 3)) * 0.06 - 0.5 * lean
+                    var w = 0.035 * (1 - 0.6 * hh / hb2) + 0.004
+                    if dx * dx + dy * dy < w * w:
+                        tb = hh / hb2
+                        hue = rnd(hs, 4)
+                        break
+            if tb >= 0:  # a blade: dark at the root, lit at the tip, green on the meadow and purple-tipped on the heather
+                base = base * (0.5 + 0.9 * tb) * (V3(0.9 + 0.2 * hue, 1.15 + 0.15 * hue, 0.7, 0) if hb == 2 else V3(1.0 + 0.2 * tb, 0.85 + 0.1 * tb, 0.9 + 0.35 * tb, 0))
+            else:
+                base = base * (1 - 0.3 * cover)  # the ground between the blades is in their shade
         col = light(cam, base * base, n, view, sh, ao * a[3], Float32(0.05) if hb == 0 else 0)  # wet-looking scree catches the sun
         if hb == 2:  # meadow grass: back-lit sheen when looking toward the sun
             col += base * base * (0.35 * pow(1 - abs(dot(n, view)), Float32(4)) * max(dot(view, s), Float32(0)) * sh * (1 - cam[30]))
