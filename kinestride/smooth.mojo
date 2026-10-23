@@ -1803,7 +1803,7 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
 
 
 def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
-    """MuJoCo mj_instantiateEquality (engine_core_constraint.c:513) for connect, weld and joint constraints, mj_diagApprox
+    """MuJoCo mj_instantiateEquality (engine_core_constraint.c:513) for connect, weld, joint and tendon constraints, mj_diagApprox
     (:1637), mj_makeImpedance (:2069) and mj_referenceConstraint (:3048) with its mj_Jdotv correction (:973): per constraint
     the rows' residual, Jacobian over the constraint's chain (mj_jacDifPair, anchors 0 minus 1, weld rotation corrected
     by 0.5 neg(q1) J q0 relpose), D and aref. Positions are relative to the floating origin of the animal (a body of the
@@ -1845,6 +1845,21 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
                 res[(OEQA + rbase) * F + f] = 0
                 continue
             cpos[0] = dist - mf[ef + 25]
+            posn = cpos[0]
+        elif typ == 5:  # tendon (mjEQ_TENDON, engine_core_constraint.c:645): L0 - length0_0 - c0 - poly(L1 - length0_1), J = J0 - deriv J1 (mju_addToScl)
+            var t0 = Int(mi[eh + 8]); var t1 = Int(mi[eh + 9])
+            cpos[0] = ten_len(mi, mf, qpos, qvel, res, f, t0) - mf[ef + 29] - mf[ef + 24]
+            var deriv: Float32 = 0
+            if t1 >= 0:
+                var dif = ten_len(mi, mf, qpos, qvel, res, f, t1) - mf[ef + 30]
+                cpos[0] -= mf[ef + 25] * dif + mf[ef + 26] * dif * dif + mf[ef + 27] * dif * dif * dif + mf[ef + 28] * dif * dif * dif * dif
+                deriv = mf[ef + 25] + 2 * mf[ef + 26] * dif + 3 * mf[ef + 27] * dif * dif + 4 * mf[ef + 28] * dif * dif * dif
+            for c in range(nch):
+                var d = Int(mi[CEQC + choff + c])
+                var jt = ten_j(mi, mf, res, f, t0, d)
+                if t1 >= 0:
+                    jt += -deriv * ten_j(mi, mf, res, f, t1, d)
+                res[(jb + c) * F + f] = jt
             posn = cpos[0]
         elif typ == 2:  # joint: q0 - qpos0 - c0 - poly(q1 - qpos1_0) (engine_core_constraint.c:808)
             var d0 = Int(mi[eh + 8]); var d1 = Int(mi[eh + 9])
@@ -3207,6 +3222,13 @@ def fluid_deriv(mi: TI, mf: TF, res: TO, f: Int, h: Float32, sym: Bool):
 
 
 @always_inline
+def ten_len(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, t: Int) -> Float32:
+    """Tendon t's length: the row spatial() wrote (OTLEN), else the fixed tendon's sum coef qpos."""
+    comptime if SPATIAL:
+        return get(res, f, OTLEN + t)
+    return tendon(mi, mf, qpos, qvel, f, t)[0]
+
+
 def ten_j(mi: TI, mf: TF, res: TO, f: Int, t: Int, v: Int) -> Float32:
     """Tendon t's moment on dof v: the dense row spatial() wrote (OTJ), else the fixed tendon's wrap coef on that dof (0 if none)."""
     comptime if SPATIAL:

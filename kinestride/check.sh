@@ -471,6 +471,35 @@ if [ "$stage" = tendon_limit ]; then  # tendon limit rows (mj_instantiateLimit, 
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all tendon_limit checks"; exit 0
 fi
+if [ "$stage" = tendon_eq ]; then  # tendon equality rows (mjEQ_TENDON, mj_instantiateEquality engine_core_constraint.c:645) on the equality block,
+  # bilateral: model.with_tendon_equalities adds one two-tendon equality (first tendon vs last, quartic polycoef scaled by the length spread
+  # so every term moves the residual) and one single-tendon equality (offset only), solref 0.1, tolerance 0, contacts and limits off;
+  # vs mj_step as the equality stage. models/tendon_spatial.xml (spatial vs fixed tendon) at the default bar; the fly and the spider with
+  # three spatial tendons (with_spatial_tendons) at REL=2e-3 as tendon_limit's animals (the fly's light rotational dofs); the spider with
+  # two fixed tendons only (fixed=True: the engine's non-SPATIAL tendon path) at the default bar. The fixture couples a spatial tendon to
+  # the fixed one (length0 0): coupling two of its spatial tendons (length0 0.25 m, spread 8e-4 over nearby states, one float32 ulp 3.5e-5
+  # of the spread) put L - length0 at float32 resolution, qacc 5.6e-5 on the CPU with Newton stopped at 0 (not the solver). Mutants on
+  # the fixture; the dropped length0 of the second tendon on the spider (its tsplit length0 is not 0), at the spider's bar.
+  S=kinestride/smooth.mojo; mkdir -p $X/te
+  TE=$($M -c "from kinestride.model import with_tendon_equalities; print(with_tendon_equalities('kinestride/models/tendon_spatial.xml', '$X/te/fixture.xml', tolerance=0))")
+  FT=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_equalities; print(with_tendon_equalities(with_spatial_tendons('${BODY:-.work/assets/fly/body.xml}', '$X/te/fly0.xml'), '$X/te/fly.xml', tolerance=0))")
+  ST=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_equalities; print(with_tendon_equalities(with_spatial_tendons('kinestride/models/spider_test.xml', '$X/te/spider0.xml'), '$X/te/spider.xml', tolerance=0))")
+  SF=$($M -c "from kinestride.model import with_tendon_equalities; print(with_tendon_equalities('kinestride/models/spider_test.xml', '$X/te/spfixed.xml', tolerance=0, fixed=True))")
+  $M -m kinestride.model check $TE $X/te/fixture tendon_eq 64 || { echo "FAIL tendon_eq fixture"; fail=$((fail+1)); }
+  $M -m kinestride.model check $SF $X/te/spfixed tendon_eq 64 || { echo "FAIL tendon_eq spfixed"; fail=$((fail+1)); }
+  for B in $FT $ST; do
+    REL=2e-3 $M -m kinestride.model check $B $X/te/$(basename $B .xml) tendon_eq 64 || { echo "FAIL tendon_eq $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the coupling's Jacobian sign flipped, the first tendon's length0 sign flipped, the second tendon's length0 dropped
+  for mut in 's/jt += -deriv \* ten_j/jt += deriv * ten_j/' \
+             's/cpos\[0\] = ten_len(mi, mf, qpos, qvel, res, f, t0) - mf\[ef + 29\]/cpos[0] = ten_len(mi, mf, qpos, qvel, res, f, t0) + mf[ef + 29]/'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $TE $X/mutant tendon_eq 64 || fail=$((fail+1))
+  done
+  REL=2e-3 ~/iTools/bin/mutant-check $S 's/var dif = ten_len(mi, mf, qpos, qvel, res, f, t1) - mf\[ef + 30\]/var dif = ten_len(mi, mf, qpos, qvel, res, f, t1)/' -- \
+    $M -m kinestride.model check $ST $X/mutant tendon_eq 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all tendon_eq checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's
