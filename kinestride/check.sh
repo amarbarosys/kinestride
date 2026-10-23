@@ -392,6 +392,32 @@ if [ "$stage" = gravcomp ]; then  # body gravcomp (mj_gravcomp) on the fly and t
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all gravcomp checks"; exit 0
 fi
+if [ "$stage" = actfrc ]; then  # joint-level actuator force limits (clampVec(qfrc_actuator, jnt_actfrcrange), engine_forward.c:788, after actuator
+  # gravcomp) on the fly, the spider and models/gravcomp_act.xml, each through model.with_actfrc: gravcomp on (fly, spider: with_gravcomp,
+  # actuatorgravcomp on every second joint; the fixture keeps its own), ranges [-0.6 s, 0.8 s] of the median |qfrc_actuator| s on two of
+  # every three hinge/slide joints (measured: a clamp in every state, ~40 % of limited dofs at lo, ~25 % at hi), states from the UNLIMITED
+  # model's rollouts (out.npz). Fly and spider contact-free: the clamp sits upstream of the solver, and with the floor on the gate met the
+  # bodies' own contact floors instead (fly: one float32 margin coin-flip, ncon 4 vs 5; spider: its open flat-floor qLD/qfrc_constraint gap,
+  # check.sh terrain). The contact-on export layout was preflighted (fly qfrc_actuator 2.2e-7). Stage actuated, default bar.
+  S=kinestride/smooth.mojo; mkdir -p $X/af
+  FA=$($M -c "from kinestride.model import with_actfrc; print(with_actfrc('${BODY:-.work/assets/fly/body.xml}', '$X/af/fly.xml', contacts=False))")
+  SA=$($M -c "from kinestride.model import with_actfrc; print(with_actfrc('.work/spider-body/spider.xml', '$X/af/spider.xml', contacts=False))")
+  GA=$($M -c "from kinestride.model import with_actfrc; print(with_actfrc('kinestride/models/gravcomp_act.xml', '$X/af/gc_act.xml', keep=True))")
+  for B in $FA $SA $GA; do
+    STATES=${B%.xml}.npz $M -m kinestride.model check $B $X/af/$(basename $B .xml) actuated 64 || { echo "FAIL actfrc $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the clamp dropped (today's engine), the joint index taken for the dof address, the range's ends swapped
+  for mut in 's/comptime if NAFRC > 0:/comptime if NAFRC < 0:/' \
+             's/var j = Int(mi\[CAFR + i\])/var j = i/' \
+             's/min(max(get(res, f, OQACT + j), mf\[AFRF + 2 \* i\]), mf\[AFRF + 2 \* i + 1\])/min(max(get(res, f, OQACT + j), mf[AFRF + 2 * i + 1]), mf[AFRF + 2 * i])/'; do
+    MUTANT_EXPECT="FAIL qfrc_actuator" STATES=$X/af/fly.npz ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $FA $X/mutant actuated 64 || fail=$((fail+1))
+  done
+  for B in $SA $GA; do
+    MUTANT_EXPECT="FAIL qfrc_actuator" STATES=${B%.xml}.npz ~/iTools/bin/mutant-check $S 's/comptime if NAFRC > 0:/comptime if NAFRC < 0:/' -- $M -m kinestride.model check $B $X/mutant actuated 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all actfrc checks"; exit 0
+fi
 if [ "$stage" = sptendon ]; then  # spatial tendons (mj_tendon, mju_wrap): site-site, pulleys, sphere and cylinder wraps with sidesites (inside the
   # sphere too: wrap_inside), a fixed tendon beside them, a tendon servo; fixture models/tendon_spatial.xml (random states, then the actuated path
   # on rollout states) and the fly and spider with three spatial tendons added (model.with_spatial_tendons), vs mj_step on the tendon outputs

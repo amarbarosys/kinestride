@@ -1012,6 +1012,48 @@ def with_gravcomp(mjcf, out):
     return str(out)
 
 
+def with_actfrc(mjcf, out, count=64, keep=False, contacts=True):
+    """with_gravcomp(mjcf) plus joint-level actuator force limits (jnt_actfrcrange, clampVec at the end of mj_fwdActuation,
+    engine_forward.c:788): actuatorgravcomp on every second joint, and on two of every three hinge/slide joints a range
+    [-0.6 s, 0.8 s], s the median |qfrc_actuator| at that dof over the check's states and servo targets, so the clamp binds on
+    about half the states and on both sides. The states (standing rollouts of the model WITHOUT the limits: clamped servos let
+    the fly drop and bounce into contact poses no other stage meets) go to out.npz, check's STATES. keep: the model's own
+    gravcomp and actuatorgravcomp (models/gravcomp_act.xml). contacts False: pairs and contype off. The gate bodies of check.sh actfrc."""
+    spec = mujoco.MjSpec.from_file(str(mjcf) if keep else with_gravcomp(mjcf, out))
+    if not keep:
+        spec.meshdir = ''
+    joints = list(spec.joints)
+    for i, j in enumerate(joints):
+        j.actgravcomp = j.actgravcomp if keep else i % 2 == 0
+    if not contacts:
+        for pr in list(spec.pairs):
+            spec.delete(pr)
+        for g in spec.geoms:
+            g.contype = g.conaffinity = 0
+    m0 = spec.compile()
+    q, v = standing(m0, count)
+    np.savez(Path(out).with_suffix('.npz'), qpos=q, qvel=v)
+    rng, d, f = np.random.default_rng(2), mujoco.MjData(m0), np.zeros((count, m0.nv))
+    u = np.array([q[:, m0.jnt_qposadr[m0.actuator_trnid[i, 0]]] + rng.uniform(-0.3, 0.3, count)
+                  if m0.actuator_trntype[i] == mujoco.mjtTrn.mjTRN_JOINT else rng.uniform(0, 1, count) for i in range(m0.nu)]).T
+    for n in range(count):
+        d.qpos[:], d.qvel[:], d.ctrl[:] = q[n], v[n], u[n]
+        mujoco.mj_forward(m0, d)
+        f[n] = d.qfrc_actuator
+    k = 0
+    for jj, j in enumerate(joints):
+        if m0.jnt_type[jj] not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+            continue
+        s = float(np.median(np.abs(f[:, m0.jnt_dofadr[jj]])))
+        k += 1
+        if s > 0 and k % 3:
+            j.actfrclimited = mujoco.mjtLimited.mjLIMITED_TRUE
+            j.actfrcrange = [-0.6 * s, 0.8 * s]
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(spec.to_xml())
+    return str(out)
+
+
 def with_spatial_tendons(mjcf, out, stiffness=5.0, damping=0.05):
     """mjcf plus three spatial tendons, for the gate on bodies that ship none (fly, spider): a straight site-site tendon between two
     far-apart bodies, the same two sites with a sphere wrap placed on the straight path at qpos0 (a sphere geom, no mass, no
@@ -1057,13 +1099,22 @@ def with_spatial_tendons(mjcf, out, stiffness=5.0, damping=0.05):
 
 def gravcomp_block(m):
     """Body gravity compensation (engine_passive.c:817), last block: ints jnt_actgravcomp per joint (those joints' share goes to
-    qfrc_actuator, engine_forward.c:770, only when the model has actuators), floats body_gravcomp per body. Refused with joint-level
-    actuator force limits (clampVec on qfrc_actuator, not ported); a sleeping animal skips the whole step, gravcomp included (sleep_block)."""
+    qfrc_actuator, engine_forward.c:770, only when the model has actuators), floats body_gravcomp per body; joint-level actuator
+    force limits clamp that sum after it (actfrc_block); a sleeping animal skips the whole step, gravcomp included (sleep_block)."""
     if not m.body_gravcomp.any() or not np.linalg.norm(m.opt.gravity):
         return None
-    if m.jnt_actfrclimited.any():
-        raise SystemExit('FAIL export: gravcomp with joint actuator force limits (jnt_actfrcrange clamps qfrc_actuator, not ported)')
     return np.asarray(m.jnt_actgravcomp), np.asarray(m.body_gravcomp), {'GRAVCOMP': 1}
+
+
+def actfrc_block(m):
+    """Joint-level actuator force limits (clampVec(qfrc_actuator, jnt_actfrcrange, jnt_actfrclimited, njnt, jnt_dofadr),
+    engine_forward.c:788, after actuator gravcomp), last block: ints per limited joint its dofadr (the clamp touches that one
+    dof, whatever the joint type), floats its range lo, hi; -DNAFRC. None without actuators (nu 0: mj_fwdActuation returns
+    before the clamp) or without a limited joint."""
+    lim = np.flatnonzero(m.jnt_actfrclimited)
+    if not m.nu or not len(lim):
+        return None
+    return np.asarray(m.jnt_dofadr[lim]), np.asarray(m.jnt_actfrcrange[lim]).ravel(), {'NAFRC': len(lim)}
 
 
 def implicit_block(m):
@@ -1215,7 +1266,7 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
     if eq:  # after the other lanes' blocks too: a model without equalities keeps its bytes
         block = eq_block(m, eq, hr[0])
         ints, floats, sizes = ints + [block[0]], floats + [block[1]], sizes | block[2]
-    for block in (mocap_block(m), gravcomp_block(m), implicit_block(m), mid_block(m), mpair_block(m), sleep_block(m)):  # after the equality block, in Mojo's order: CMOC follows CEQM, CGC follows CMOC, CIMP follows CGC, CMID follows the implicit block
+    for block in (mocap_block(m), gravcomp_block(m), implicit_block(m), mid_block(m), mpair_block(m), sleep_block(m), actfrc_block(m)):  # after the equality block, in Mojo's order: CMOC follows CEQM, CGC follows CMOC, CIMP follows CGC, CMID follows the implicit block, CAFR follows MPAIR, AFRF follows SLPF
         if block:
             ints, floats, sizes = ints + [block[0]], floats + [block[1]], sizes | block[2]
     if hfexact and os.environ.get('HTAB') and 'HFNR' in sizes:  # table heightfield: the engine reads node heights, not the function

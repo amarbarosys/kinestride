@@ -144,7 +144,10 @@ comptime DPAIR = M2D + NDD  # (k, p) -> D entry or -1 (model.py pair_table), NV 
 comptime NMID = get_defined_int["NMID", 0]()
 comptime CMID = DPAIR + NV * NV if IMPL else CIMP
 comptime MPAIR = CMID + 3 * NMID  # implicitfast (model.py mpair_block): (k, p) -> M lower entry or -1, NV x NV
-comptime NI = MPAIR + (NV * NV if get_defined_int["MPAIR", 0]() == 1 else 0)
+# joint-level actuator force limits (model.py actfrc_block, last): per limited joint its dofadr; floats lo, hi at AFRF
+comptime NAFRC = get_defined_int["NAFRC", 0]()
+comptime CAFR = MPAIR + (NV * NV if get_defined_int["MPAIR", 0]() == 1 else 0)
+comptime NI = CAFR + NAFRC
 comptime CKIND = NI2  # NCV: per pair 0 plane/sphere/tangent, 1 ellipsoid-mesh, 2 box-mesh, 3 exact heightfield, 4 primitive pair (GJK + EPA), 5 capsule-capsule, 6 sphere-capsule, 7 sphere-cylinder
 comptime CGT = CKIND + NCP  # NCV: per pair the convex.mojo shape kinds of geom1 and geom2
 comptime CCND = CKIND + 3 * NCP  # NCV: per pair condim (1: one frictionless row, 3: the pyramid)
@@ -188,7 +191,8 @@ comptime CGF = CEQF + EQF * NEQ
 comptime GAME = get_defined_int["GAME", 0]() == 1 and STAGE >= 7  # game layer per step (~/Projects/science/fly-connectome/docs/plans/GAME_LAYER.md): energy, health, stamina, dead
 comptime SLEEP = get_defined_int["SLEEP", 0]() == 1  # mj_sleep (model.py sleep_block): opt.sleep_tolerance, then dof_length per dof (the velocity weights)
 comptime SLPF = CGF + (NB if GRAVCOMP else 0)
-comptime GAMEF = SLPF + (1 + NV if SLEEP else 0)  # GAME: rules appended to mf.bin: basal drain, work rate, health regen
+comptime AFRF = SLPF + (1 + NV if SLEEP else 0)  # NAFRC: jnt_actfrcrange lo, hi per limited joint
+comptime GAMEF = AFRF + 2 * NAFRC  # GAME: rules appended to mf.bin: basal drain, work rate, health regen
 comptime NFL = GAMEF + (3 if GAME else 0)
 comptime NFLT = NFL + (2 + HFNR * HFNC if HTAB else 0)  # mf.bin length: HTAB appends the heightfield table last (CHT == NFL)
 comptime HFNR = get_defined_int["HFNR", 2]()  # HFEXACT: grid rows and columns of the MuJoCo hfield (the engine's grid is virtual and endless, same step)
@@ -1669,7 +1673,8 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
     """MuJoCo mj_transmission + mj_fwdActuation for the ported kinds. Joint (hinge, slide): moment = gear on the
     joint's dof, length = qpos gear. Body (adhesion): moment = -(mean contact normal Jacobian) over the body's
     contacts (pyramid rows weighted 0.5 / (dim - 1), which sums to the normal row), length 0. Force = gain ctrl
-    (ctrl clamped to ctrlrange) + bias0 + bias1 length + bias2 velocity, clamped to forcerange; qfrc = moment' force."""
+    (ctrl clamped to ctrlrange) + bias0 + bias1 length + bias2 velocity, clamped to forcerange; qfrc = moment' force, plus
+    actuator gravcomp, then clamped per joint to jnt_actfrcrange (engine_forward.c:788)."""
     for v in range(NV):
         res[(OQACT + v) * F + f] = 0
     comptime if GAME:  # a dead animal has no servo or adhesion effort (game.actuator_scale)
@@ -1790,6 +1795,11 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             var da = Int(mi[DOFADR + j])
             for d in range(da, da + (6 if t == 0 else (3 if t == 1 else 1))):
                 res[(OQACT + d) * F + f] += get(res, f, OGC + d)
+
+    comptime if NAFRC > 0:  # clamp qfrc_actuator to joint-level actuator force limits (clampVec, engine_forward.c:788): the joint's first dof
+        for i in range(NAFRC):
+            var j = Int(mi[CAFR + i])
+            res[(OQACT + j) * F + f] = min(max(get(res, f, OQACT + j), mf[AFRF + 2 * i]), mf[AFRF + 2 * i + 1])
 
 
 def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
