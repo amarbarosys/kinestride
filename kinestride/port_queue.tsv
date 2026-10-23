@@ -3,3 +3,17 @@ hfield-cone	mj_instantiateContact	engine_core_constraint.c	cone_hfield	done 0c08
 tendon-limits	mj_instantiateLimit	engine_core_constraint.c	tendon_limit	done 6273a01	tendon limits (rows on the equality block); tendon equalities and friction loss stay refused
 flight-contacts	mj_collideGeoms	engine_collision_driver.c	flight_contacts	done cdc3b60	automatic pairs + sphere/capsule/ellipsoid/cylinder narrowphase + condim 1 for the flight model; EPA multicontact stays unported
 sleep	mj_sleep	engine_sleep.c	sleep	done 9990fd0	sleep filter per animal (one tree = one island); throughput only, zero gain while every animal walks
+solref-direct	mj_makeImpedance	engine_core_constraint.c	solref_direct	open	WF: direct solref (negative) on equality and limit rows; contacts already have it
+actfrc-gravcomp	mj_fwdActuation	engine_forward.c	actfrc	open	WF: jnt_actfrcrange clamp with gravcomp (export refuses today)
+tendon-eq	mj_instantiateEquality	engine_core_constraint.c	tendon_eq	open	WF: mjEQ_TENDON rows (cubic polycoef), Newton + pyramidal + Euler first
+eq-active-runtime	mj_instantiateEquality	engine_core_constraint.c	eqact_runtime	open	WF: d->eq_active written by the host between steps (U4 has per-animal initial only)
+dof-friction	mj_instantiateFriction	engine_core_constraint.c	frictionloss	open	LANE: dof friction loss rows (Newton first)
+tendon-friction	mj_instantiateFriction	engine_core_constraint.c	tendon_friction	open	LANE: tendon friction loss rows
+condim-4-6	mj_instantiateContact	engine_core_constraint.c	condim46	open	LANE: torsional (4) and rolling (6) friction, pyramidal and elliptic
+free-free-pair	mj_collision	engine_collision_driver.c	freefree	open	LANE: contact pair across two free bodies (two floating origins)
+cross-animal-pair	mj_collision	engine_collision_driver.c	pair_cross_animal	open	LANE: explicit pair whose geoms sit on two animals
+pgs-full	solPGS	engine_solver.c	pgs_full	open	LANE: PGS with elliptic cones, convex pairs, equality and friction-loss rows; islands across trees
+cg-full	mj_solCG	engine_solver.c	cg_full	open	LANE: CG with elliptic cones, convex pairs, equality and friction-loss rows
+elliptic-integrators	mj_RungeKutta	engine_forward.c	elliptic_int	open	LANE: elliptic cone under RK4 and implicitfast (mostly a gate)
+meshmesh-margin0	mjc_Convex	engine_collision_convex.c	meshmesh0	open	LANE: margin 0 mesh-mesh (MuJoCo's native polygon clipping)
+flex	mj_flex	engine_core_smooth.c	flex	open	LANE: plan only, docs/plans/FLEX.md, no code (XL, 3000+ LOC)
