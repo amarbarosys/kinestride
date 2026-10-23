@@ -679,6 +679,37 @@ if [ "$stage" = pgs_full ]; then  # PGS over every row kind and islands across t
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all pgs_full checks"; exit 0
 fi
+if [ "$stage" = cg_full ]; then  # CG (mj_solCG) over every row kind: Newton's update, line search and gradient already carry the equality
+  # block and the cone, CG adds no Hessian; ENGINE_OPT solver=1, vs MuJoCo per state with a fresh MjData. The engine's CG is one block
+  # and runs on past MuJoCo's float32-early stops (see newton()); a step whose line search returns alpha < 0 restarts Polak-Ribiere
+  # (free_pair elliptic state 43 overflowed to NaN without it). Bars where float32 CG's own accuracy sits above 1e-5 (measured): the
+  # arena REL 6e-3 (4.9e-3; Newton 1.7e-3, PGS 3.1e-3 on the same states), the mixed fixture REL 4e-4: qacc 1.06e-5 (Newton 4e-7),
+  # qacc_euler 1.17e-4 and with EQACT 2.86e-4 (the equality stage's own qacc_euler bar is 1e-4: M^-1 amplifies the light dofs).
+  S=kinestride/smooth.mojo; I=$X/cg; mkdir -p $I
+  F=${BODY:-.work/assets/fly/body.xml}
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('$F', 0))")
+  EM=$($M -c "from kinestride.model import with_inactive, with_joint_limits, with_frictionloss; print(with_inactive(with_joint_limits(with_frictionloss('kinestride/models/eq_test.xml', '$I/fl.xml', tolerance=0), '$I/fljl.xml', solref=0.1, tolerance=0), '$I/mixed.xml'))")
+  W0=$($M -c "from kinestride.model import shifted; print(shifted('kinestride/models/cross_world.xml', '$I/w0.xml', 0))")
+  FP=kinestride/models/free_pair.xml
+  ENGINE_OPT=solver=1 $M -m kinestride.model check $E0 $I/ell actuated 64 || { echo "FAIL cg_full fly elliptic"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1,noslip=0 CONVEX=1 REL=6e-3 $M -m kinestride.model check $F $I/arena actuated 64 || { echo "FAIL cg_full fly arena"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1 REL=4e-4 $M -m kinestride.model check $EM $I/mixed equality 64 || { echo "FAIL cg_full mixed"; fail=$((fail+1)); }
+  EQACT=1 ENGINE_OPT=solver=1 REL=4e-4 $M -m kinestride.model check $EM $I/mixed1 equality 64 || { echo "FAIL cg_full mixed EQACT=1"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1,noslip=0 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $W0 $I/cweq equality 64 || { echo "FAIL cg_full cross_world equality"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1,noslip=0 $M -m kinestride.model check $W0 $I/cwtl tendon_limit 64 || { echo "FAIL cg_full cross_world tendon_limit"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check kinestride/models/islands.xml $I/isl contact 64 || { echo "FAIL cg_full islands"; fail=$((fail+1)); }
+  for c in 0 1; do
+    ENGINE_OPT=solver=1,cone=$c CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $FP $I/ff$c contact 64 || { echo "FAIL cg_full free_pair cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the descent restart dropped (free_pair elliptic: NaN on the CPU engine, state 43; the card's float path
+  # does not overflow there, so this one runs CPU=1), the Polak-Ribiere numerator's difference summed (mixed)
+  CPU=1 ENGINE_OPT=solver=1,cone=1 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S 's/            if alpha < 0:  # the search was not a descent direction/            if False:  # the search was not a descent direction/' -- \
+    $M -m kinestride.model check $FP $I/mutant contact 64 || fail=$((fail+1))
+  ENGINE_OPT=solver=1 REL=4e-4 ~/iTools/bin/mutant-check $S 's/(get(res, f, OCGM + v) - get(res, f, OCGMO + v))/(get(res, f, OCGM + v) + get(res, f, OCGMO + v))/' -- \
+    $M -m kinestride.model check $EM $I/mutant equality 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all cg_full checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's

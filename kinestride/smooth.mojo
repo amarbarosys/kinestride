@@ -3170,6 +3170,8 @@ def newton(mi: TI, mf: TF, res: TO, f: Int):
                 num += get(res, f, OGRAD + v) * (get(res, f, OCGM + v) - get(res, f, OCGMO + v))
                 den += get(res, f, OCGO + v) * get(res, f, OCGMO + v)
             var beta = max(num / max(den, Float32(1e-15)), Float32(0))
+            if alpha < 0:  # the search was not a descent direction (float32 after convergence): restart, else the direction grows ~3.8x
+                beta = 0  # per two steps with alternating alpha until it overflows (free_pair elliptic, state 43); MuJoCo's tests stop first
             for v in range(NV):
                 res[(OSRCH + v) * F + f] = -get(res, f, OCGM + v) + beta * get(res, f, OSRCH + v)
 
