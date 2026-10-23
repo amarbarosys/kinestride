@@ -8,7 +8,7 @@ actfrc-gravcomp	mj_fwdActuation	engine_forward.c	actfrc	done 5488855	WF: jnt_act
 tendon-eq	mj_instantiateEquality	engine_core_constraint.c	tendon_eq	done b4d4d5c	WF: mjEQ_TENDON rows (cubic polycoef), Newton + pyramidal + Euler first
 eq-active-runtime	mj_instantiateEquality	engine_core_constraint.c	eqact_runtime	done ca9c0b9	WF: d->eq_active written by the host between steps (U4 has per-animal initial only)
 dof-friction	mj_instantiateFriction	engine_core_constraint.c	frictionloss	done a0dda84	LANE: dof friction loss rows (Newton first)
-tendon-friction	mj_instantiateFriction	engine_core_constraint.c	tendon_friction	open	LANE: tendon friction loss rows
+tendon-friction	mj_instantiateFriction	engine_core_constraint.c	tendon_friction	done b2fad3d	LANE: tendon friction loss rows
 condim-4-6	mj_instantiateContact	engine_core_constraint.c	condim46	open	LANE: torsional (4) and rolling (6) friction, pyramidal and elliptic
 free-free-pair	mj_collision	engine_collision_driver.c	freefree	open	LANE: contact pair across two free bodies (two floating origins)
 cross-animal-pair	mj_collision	engine_collision_driver.c	pair_cross_animal	open	LANE: explicit pair whose geoms sit on two animals
