@@ -13,7 +13,7 @@ condim-4-6	mj_instantiateContact	engine_core_constraint.c	condim46	done 4a6efbb	
 free-free-pair	mj_collision	engine_collision_driver.c	freefree	done 4074f8b	LANE: contact pair across two free bodies (two floating origins)
 cross-animal-pair	mj_collision	engine_collision_driver.c	pair_cross_animal	done 793d46c	LANE: explicit pair whose geoms sit on two animals
 pgs-full	solPGS	engine_solver.c	pgs_full	done 07dea68	LANE: PGS with elliptic cones, convex pairs, equality and friction-loss rows; islands across trees
-cg-full	mj_solCG	engine_solver.c	cg_full	open	LANE: CG with elliptic cones, convex pairs, equality and friction-loss rows
+cg-full	mj_solCG	engine_solver.c	cg_full	done 6408155	LANE: CG with elliptic cones, convex pairs, equality and friction-loss rows
 elliptic-integrators	mj_RungeKutta	engine_forward.c	elliptic_int	open	LANE: elliptic cone under RK4 and implicitfast (mostly a gate)
 meshmesh-margin0	mjc_Convex	engine_collision_convex.c	meshmesh0	open	LANE: margin 0 mesh-mesh (MuJoCo's native polygon clipping)
 flex	mj_flex	engine_core_smooth.c	flex	open	LANE: plan only, docs/plans/FLEX.md, no code (XL, 3000+ LOC)
