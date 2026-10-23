@@ -1,0 +1,26 @@
+<mujoco model="spin_test">
+  <!-- check.sh condim46: torsional and rolling friction (condim 4 and 6) where they dominate: three free octahedra on a plane
+       (plane-mesh pairs), one pair each at condim 3, 4 and 6 (a pair with fewer rows than the widest leaves its rows empty),
+       and a sphere swinging on a ball joint about its parent sphere's centre, 0.5 mm into it, at condim 6 (geom1 is the child:
+       its ball dofs enter the Jacobian with sign -1, the shared free dofs cancel); states from model.spin_states: one vertex in
+       the floor, spinning and rolling. -->
+  <option timestep="0.002" noslip_iterations="0" tolerance="0"/>
+  <asset>
+    <mesh name="oct" vertex="0.1 0 0  -0.1 0 0  0 0.1 0  0 -0.1 0  0 0 0.1  0 0 -0.1"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.1" contype="0" conaffinity="0"/>
+    <body name="b3" pos="-0.4 0 0.1"><freejoint/><geom name="b3" type="mesh" mesh="oct" mass="1" contype="0" conaffinity="0"/></body>
+    <body name="b4" pos="0 0 0.1"><freejoint/><geom name="b4" type="mesh" mesh="oct" mass="1" contype="0" conaffinity="0"/></body>
+    <body name="b6" pos="0.4 0 0.1"><freejoint/><geom name="b6" type="mesh" mesh="oct" mass="1" contype="0" conaffinity="0"/></body>
+    <body name="s1" pos="1 0 0.5"><freejoint/><geom name="s1" type="sphere" size="0.05" mass="0.5" contype="0" conaffinity="0"/>
+      <body name="s2" pos="0.1095 0 0"><joint name="swing" type="ball" pos="-0.1095 0 0"/><geom name="s2" type="sphere" size="0.06" mass="0.7" contype="0" conaffinity="0"/></body>
+    </body>
+  </worldbody>
+  <contact>
+    <pair geom1="floor" geom2="b3" condim="3" friction="1 1 0.05 0.02 0.02"/>
+    <pair geom1="floor" geom2="b4" condim="4" friction="0.8 0.8 0.05 0.02 0.02"/>
+    <pair geom1="floor" geom2="b6" condim="6" friction="1 0.6 0.04 0.03 0.01"/>
+    <pair geom1="s2" geom2="s1" condim="6" friction="0.9 0.7 0.03 0.02 0.01"/>
+  </contact>
+</mujoco>

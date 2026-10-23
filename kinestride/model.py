@@ -311,6 +311,11 @@ def override(m):
             tendon = m.actuator_trntype == mujoco.mjtTrn.mjTRN_TENDON  # made affine: tendon_spatial.xml's servo ships biastype none
             m.actuator_biastype[tendon] = mujoco.mjtBias.mjBIAS_AFFINE
             m.actuator_biasprm[tendon, 2] = -float(val)
+        elif key == 'condim':  # every pair's condim (check.sh condim46: the fly's foot pairs at 4 and 6)
+            m.pair_dim[:] = int(val)
+        elif key == 'spin':  # every pair's torsional and rolling friction, 'torsion:rolling' (friction 2, and 3-4)
+            t, r = (float(x) for x in val.split(':'))
+            m.pair_friction[:, 2], m.pair_friction[:, 3:5] = t, r
         elif key == 'cone':  # mjtCone value: the flight model ships elliptic, gated under Euler only; its fluid-derivative gate runs it pyramidal
             m.opt.cone = int(val)
         elif key == 'dt':  # timestep: explicit RK4 damps dofs explicitly, h B / M reaches 5.9 on the fly at h 1e-4 (stable below 2.8)
@@ -604,15 +609,16 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
 
     ints   per pair: geom1, geom2, geom2's body, hull vertex count (0: sphere-sphere), hull vertex offset,
            edge-address offset, chain length, chain offset, contact slot offset, slot count (3 mesh, 1 sphere),
-           Jacobian offset (4 rows x slots x chain) (11); then every hull vertex's first edge (absolute, into the
+           Jacobian offset (RS rows x slots x chain; RS 4 up to condim 3) (11); then every hull vertex's first edge (absolute, into the
            edge list), the edge lists (hull-local vertex ids, -1 ends a vertex), the dof chains (H's row pattern of the
            pair's deepest dof, ascending), their Jacobian signs (+1 geom2's body only, -1 geom1's only, 0 both or
            neither), H's pattern (rowadr, rownnz, colind as hpattern()), M's entry -> H's entry, opt.iterations,
-           opt.ls_iterations, opt.noslip_iterations
+           opt.ls_iterations, opt.noslip_iterations; then, with a condim 4 or 6 pair (DIMX), every pair's condim
     couple: extra dof sets that H must couple (equality constraints, eqs()); hrows, if a list, receives H's row patterns;
     hull_out, if a list, receives the hull table {mesh id: (vertex offset, first-edge offset)} (convex_block: geom1 of a mesh-mesh pair)
     floats per pair: margin, gap, friction 0-1, solref 2, solimp 5, invweight0 translation (both bodies), rbound of
-           geom2 and geom1 (14); then hull vertices in the geom frame; then opt.impratio, opt.tolerance, opt.ls_tolerance, opt.noslip_tolerance, stat.meaninertia
+           geom2 and geom1 (14); then hull vertices in the geom frame; then opt.impratio, opt.tolerance, opt.ls_tolerance, opt.noslip_tolerance, stat.meaninertia;
+           then, with DIMX, every pair's friction 2-4 (torsional, rolling 1 and 2)
     """
     elliptic = m.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
     if m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON and (elliptic or convex or hfexact):  # CG and PGS: pyramidal rows of plane-mesh and sphere pairs (check.sh solver)
@@ -625,8 +631,12 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
     if convex and any(m.geom_type[pair_geoms(m, i)[0]] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_MESH) and m.geom_type[pair_geoms(m, i)[1]] == mujoco.mjtGeom.mjGEOM_MESH
                       and m.pair_margin[i] + m.pair_gap[i] <= 0 for i in sel):  # mjc_Convex maxContacts: margin 0 takes native polygon clipping
         raise SystemExit('FAIL export: box-mesh and mesh-mesh pairs need margin > 0 (MuJoCo clips polygons at margin 0; not ported)')
-    if any(m.pair_dim[i] not in (1, 3) or m.pair_solimp[i][4] != int(m.pair_solimp[i][4]) for i in sel):
-        raise SystemExit('FAIL export: only condim 1 and 3 contacts with a whole solimp power are ported')
+    if any(m.pair_dim[i] not in (1, 3, 4, 6) or m.pair_solimp[i][4] != int(m.pair_solimp[i][4]) for i in sel):
+        raise SystemExit('FAIL export: only condim 1, 3, 4 and 6 contacts with a whole solimp power are ported')
+    dimx = max([3] + [int(m.pair_dim[i]) for i in sel])
+    if dimx > 3 and (m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.noslip_iterations):
+        raise SystemExit('FAIL export: condim 4 and 6 (torsional, rolling) are gated with the Newton solver and noslip_iterations 0 only (check.sh condim46)')
+    rs = max(4, dimx) if elliptic else (4 if dimx <= 3 else 2 * (dimx - 1))  # rows per contact slot (smooth.mojo RS)
     if not convex and any(m.pair_dim[i] == 1 for i in sel):
         raise SystemExit('FAIL export: condim 1 pairs ride the convex block (CONVEX=1, check.sh flight_contacts)')
 
@@ -680,7 +690,7 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
             poolch = max(poolch, len(chain))
         else:
             head += [g1, g2, b, nv, *(hulls[m.geom_dataid[g2]] if nv else (0, 0)), len(chain), len(chains), nslot, ns, nje]
-            nslot, nje = nslot + ns, nje + 4 * ns * len(chain)
+            nslot, nje = nslot + ns, nje + rs * ns * len(chain)
         chains += chain
         signs += [(c in a2) - (c in a1) for c in chain]
         sr = m.pair_solref[i] if (m.pair_solref[i][0] > 0) == (m.pair_solref[i][1] > 0) else (0.02, 1.0)  # mixed format: MuJoCo's default (getsolparam)
@@ -692,15 +702,19 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
     hadr = list(np.cumsum([0] + hnnz[:-1]))
     hcol = [c for r in hrow for c in r]
     mtoh = [hadr[v] + hrow[v].index(m.M_colind[a]) for v in range(m.nv) for a in range(m.M_rowadr[v], m.M_rowadr[v] + m.M_rownnz[v])]
-    ints = np.array(head + first + edges + chains + signs + hadr + hnnz + hcol + mtoh + [m.opt.iterations, m.opt.ls_iterations, m.opt.noslip_iterations])
-    floats = fl + verts + [m.opt.impratio, m.opt.tolerance, m.opt.ls_tolerance, m.opt.noslip_tolerance, m.stat.meaninertia]
+    ints = np.array(head + first + edges + chains + signs + hadr + hnnz + hcol + mtoh + [m.opt.iterations, m.opt.ls_iterations, m.opt.noslip_iterations]
+                    + ([int(m.pair_dim[i]) for i in sel] if dimx > 3 else []))  # DIMX > 3: per pair condim (smooth.mojo CDIM)
+    floats = fl + verts + [m.opt.impratio, m.opt.tolerance, m.opt.ls_tolerance, m.opt.noslip_tolerance, m.stat.meaninertia] + (
+        [x for i in sel for x in m.pair_friction[i][2:5]] if dimx > 3 else [])  # DIMX > 3: per pair torsional and rolling friction (CFR)
     npool = min(pool[0], CONVEX_POOL) + min(pool[1], HF_POOL) + min(pool[2], PRIM_POOL)  # the pool is shared per animal; pairs beyond it drop contacts (the gates' ncon shows it)
-    jpool = npool * 4 * poolch
+    jpool = npool * rs * poolch
     sizes = {'NCP': len(sel), 'NHV': len(verts) // 3, 'NHE': len(edges), 'NCH': len(chains), 'NH': len(hcol), 'NSLOT': nslot + npool, 'NJE': nje + jpool}
     if npool:
         sizes |= {'NPOOL': npool, 'JPOOL': jpool}
     if elliptic:
         sizes['ELLIPTIC'] = 1
+    if dimx > 3:
+        sizes['DIMX'] = dimx
     hf = sorted({m.pair_geom1[i] for i in sel if m.geom_type[m.pair_geom1[i]] == mujoco.mjtGeom.mjGEOM_HFIELD})
     if hf:  # terrain: the heightfield is MuJoCo's sample; the engine evaluates world.py's function from its 8 params
         t = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_NUMERIC, 'terrain')
@@ -1075,6 +1089,48 @@ def with_tendon_friction(mjcf, out, count=256, quantile=0.5, tolerance=None, fix
         ten.frictionloss = float(np.quantile(frc[:, m0.tendon(ten.name).id], quantile))
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(spec.to_xml())
+    return str(out)
+
+
+def spin_states(mjcf, out, count=64, seed=0):
+    """States for models/spin_test.xml (check.sh condim46): every body at a random orientation with one clear lowest mesh vertex
+    0.1..1 mm into the floor, linear velocity +-0.3 m/s, angular +-20 rad/s (spin and rolling above the slip threshold in some
+    states, below in others); the sphere pair at +-5 rad/s. Written to `out` as qpos, qvel (the STATES= format); returns the path."""
+    m = mujoco.MjModel.from_xml_path(str(mjcf))
+    rng = np.random.default_rng(seed)
+    q, v = np.tile(m.qpos0, (count, 1)), np.zeros((count, m.nv))
+    for j in range(m.njnt):
+        a, dv = m.jnt_qposadr[j], m.jnt_dofadr[j]
+        g = m.body_geomadr[m.jnt_bodyid[j]]
+        if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_BALL:  # the swinging sphere: any orientation about its parent's centre
+            qq = rng.normal(size=(count, 4))
+            q[:, a:a + 4] = qq / np.linalg.norm(qq, axis=1, keepdims=True)
+            v[:, dv:dv + 3] = rng.uniform(-5, 5, (count, 3))  # the pair at 20 rad/s: qacc 1.4e-5 of max with condim 3 too (floor 2.4e-7), not this gate's rows
+            continue
+        sphere = m.geom_type[g] == mujoco.mjtGeom.mjGEOM_SPHERE
+        v[:, dv:dv + 3] = rng.uniform(-0.3, 0.3, (count, 3))
+        v[:, dv + 3:dv + 6] = rng.uniform(-5, 5, (count, 3)) if sphere else rng.uniform(-20, 20, (count, 3))
+        if sphere:  # the parent sphere: in the air at any orientation
+            qq = rng.normal(size=(count, 4))
+            q[:, a + 3:a + 7] = qq / np.linalg.norm(qq, axis=1, keepdims=True)
+            continue
+        mesh = m.geom_dataid[g]
+        gR = np.zeros(9)
+        mujoco.mju_quat2Mat(gR, m.geom_quat[g])
+        vert = m.geom_pos[g] + m.mesh_vert[m.mesh_vertadr[mesh]:m.mesh_vertadr[mesh] + m.mesh_vertnum[mesh]] @ gR.reshape(3, 3).T
+        for n in range(count):
+            while True:  # one clear lowest vertex: an edge down (two vertices within 1e-5 in depth) splits MuJoCo's plane-mesh
+                qq = rng.normal(size=4)  # contact count from the engine's (1 vs 2, a narrowphase tie, not this stage's rows)
+                qq /= np.linalg.norm(qq)
+                R = np.zeros(9)
+                mujoco.mju_quat2Mat(R, qq)
+                z = np.sort((vert @ R.reshape(3, 3).T)[:, 2])
+                if z[1] - z[0] > 5e-3:
+                    break
+            q[n, a + 3:a + 7] = qq
+            q[n, a + 2] = -z[0] - rng.uniform(1e-4, 1e-3)
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    np.savez(out, qpos=q, qvel=v)
     return str(out)
 
 

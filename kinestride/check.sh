@@ -569,6 +569,37 @@ if [ "$stage" = tendon_friction ]; then  # tendon friction-loss rows (mj_instant
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all tendon_friction checks"; exit 0
 fi
+if [ "$stage" = condim46 ]; then  # torsional and rolling friction (condim 4 and 6, mj_instantiateContact's rotational rows), pyramidal
+  # and elliptic, Newton, noslip 0. Precision on models/spin_test.xml (octahedra on a floor at condim 3, 4 and 6, one vertex down,
+  # spinning and rolling; a sphere on a ball joint touching its parent at condim 6, geom1 the child; model.spin_states): 1e-5,
+  # both cones. Coverage on the fly's foot pairs at condim 4 and 6 (ENGINE_OPT condim; torsion 0.02, rolling 1e-4 as shipped),
+  # both cones, at REL 2.5e-4: the stance's float32 error grows with the extra rows (measured on 64 standing states: pyramidal
+  # condim 6 qfrc_constraint 1.93e-4 against a 4.5e-5 input floor, condim 4 1.02e-4, elliptic condim 4 qacc_euler 4.3e-5,
+  # condim 6 1.55e-4, all on the root's yaw and lateral dofs; a 10x tighter Newton stop leaves it unchanged; condim 6 with
+  # torsion and rolling 0 stays at 2.1x its floor, condim 3 at 2.7x), while the same rows on the fixture sit at 2e-6.
+  S=kinestride/smooth.mojo; mkdir -p $X/c46
+  SP=$($M -c "from kinestride.model import spin_states; print(spin_states('kinestride/models/spin_test.xml', '$X/c46/spin-states.npz'))")
+  for c in 0 1; do
+    STATES=$SP ENGINE_OPT=cone=$c $M -m kinestride.model check kinestride/models/spin_test.xml $X/c46/spin$c contact 64 || { echo "FAIL condim46 spin_test cone $c"; fail=$((fail+1)); }
+  done
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('${BODY:-.work/assets/fly/body.xml}', 0))")
+  for c in 4 6; do
+    REL=2.5e-4 ENGINE_OPT=condim=$c,noslip=0 $M -m kinestride.model check ${BODY:-.work/assets/fly/body.xml} $X/c46/fly$c contact 64 || { echo "FAIL condim46 fly pyramidal $c"; fail=$((fail+1)); }
+    REL=2.5e-4 ENGINE_OPT=condim=$c $M -m kinestride.model check $E0 $X/c46/flyell$c contact 64 || { echo "FAIL condim46 fly elliptic $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: pyramidal: the rotational Jacobian's geom1 sign dropped, a pyramid edge's sign, torsion about a tangent;
+  # elliptic: rolling rows' R left at R1, the middle zone's tangential force sign, the line search's cone slope sign
+  for mut in 's/var jr = ang \* sg$/var jr = ang/' 's/(sc\[kk\] if k % 2 == 0 else -sc\[kk\])/(sc[kk] if k % 2 == 0 else sc[kk])/' \
+             's/jc\[3\] = (normal \* jr).reduce_add()/jc[3] = (y * jr).reduce_add()/'; do
+    STATES=$SP ENGINE_OPT=cone=0 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check kinestride/models/spin_test.xml $X/mutant contact 64 || fail=$((fail+1))
+  done
+  for mut in 's/D\[j + 1\] = 1 \/ (R1 \* f0 \* f0 \/ (sc\[j + 1\] \* sc\[j + 1\]))/D[j + 1] = 1 \/ R1/' \
+             's/force = -fnorm \/ T \* U \* sc/force = fnorm \/ T * U * sc/' 's/t\[4\] += Dm \* (N - mu \* T) \* (V0 - mu \* T1)/t[4] -= Dm * (N - mu * T) * (V0 - mu * T1)/'; do
+    STATES=$SP ENGINE_OPT=cone=1 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check kinestride/models/spin_test.xml $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all condim46 checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's
