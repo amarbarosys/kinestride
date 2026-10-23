@@ -82,7 +82,10 @@ Fixed tendons (joint wraps with coefs; length, velocity, spring with dead zone, 
 
 Equality constraints (connect, weld, joint, tendon; body and site semantics) and mocap bodies are ported (`model.eq_rows`/`eq_block`/`mocap_block`, last export blocks;
 `equality()` in smooth.mojo; NEQ and NMOCAP comptime, absent for walking bodies). Export refuses equality with CG/PGS, elliptic cones, a non-Euler integrator,
-dof friction loss (refused at export), adhesion on a body with a gap pair (excluded contacts in the gap band transmit adhesion in MuJoCo; refused), flex equalities and coupling across two trees outside Newton + pyramidal + Euler (`check.sh cross`); initial `eq_active` only (no runtime toggling).
+dof friction loss (refused at export), adhesion on a body with a gap pair (excluded contacts in the gap band transmit adhesion in MuJoCo; refused), flex equalities and coupling across two trees outside Newton + pyramidal + Euler (`check.sh cross`). Every equality is exported, inactive at start too (`eq_active0`, the 13th int per equality of `eq_block`): without `-DEQACT` the engine holds
+`eq_active0`, with it the host's ctrl.bin rows switch any equality per animal between launches (D = 0 for an inactive one, as MuJoCo drops its rows); `check.sh eqact_runtime`
+(`model.with_inactive`: every other equality inactive at start; eq_test, the spider's fixed-tendon equalities within 1e-5, the fly's spatial-tendon ones within 2e-3, EQACT unset and
+random; `eqact_rollout`: 12 K=1 launches x 64 animals, the host flipping a third of the equalities every 3 launches, qpos_next 4.7e-7, qacc_euler 5.7e-5 of its max; 2 mutants).
 Gates use states near qpos0 (`model.nearby`; `EQSPREAD=far` for metre-sized violations, MEASURED); qacc_euler's bar is lifted to 1e-4 (float32 cancellation in D (J qacc - aref), measured 4.6e-5).
 
 Gravcomp (`body_gravcomp`, `model.gravcomp_block`, `gravcomp()` in smooth.mojo, comptime `GRAVCOMP`) is ported including `jnt_actgravcomp`: those joints' share goes to

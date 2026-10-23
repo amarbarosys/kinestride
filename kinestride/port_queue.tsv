@@ -6,7 +6,7 @@ sleep	mj_sleep	engine_sleep.c	sleep	done 9990fd0	sleep filter per animal (one tr
 solref-direct	mj_makeImpedance	engine_core_constraint.c	solref_direct	done a5912f3	WF: direct solref (negative) on equality and limit rows; contacts already have it
 actfrc-gravcomp	mj_fwdActuation	engine_forward.c	actfrc	done 5488855	WF: jnt_actfrcrange clamp with gravcomp (export refuses today)
 tendon-eq	mj_instantiateEquality	engine_core_constraint.c	tendon_eq	done b4d4d5c	WF: mjEQ_TENDON rows (cubic polycoef), Newton + pyramidal + Euler first
-eq-active-runtime	mj_instantiateEquality	engine_core_constraint.c	eqact_runtime	open	WF: d->eq_active written by the host between steps (U4 has per-animal initial only)
+eq-active-runtime	mj_instantiateEquality	engine_core_constraint.c	eqact_runtime	done ca9c0b9	WF: d->eq_active written by the host between steps (U4 has per-animal initial only)
 dof-friction	mj_instantiateFriction	engine_core_constraint.c	frictionloss	open	LANE: dof friction loss rows (Newton first)
 tendon-friction	mj_instantiateFriction	engine_core_constraint.c	tendon_friction	open	LANE: tendon friction loss rows
 condim-4-6	mj_instantiateContact	engine_core_constraint.c	condim46	open	LANE: torsional (4) and rolling (6) friction, pyramidal and elliptic
