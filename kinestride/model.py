@@ -508,9 +508,7 @@ def cross_trees(m, regex, convex):
             if moving(b1) and moving(b2) and m.body_rootid[b1] != m.body_rootid[b2]:
                 out.append(f'pair {p}')
     E, O = mujoco.mjtEq, mujoco.mjtObj
-    for i in range(m.neq):
-        if not m.eq_active0[i]:
-            continue
+    for i in range(m.neq):  # inactive ones too: the host may switch them on (eq_active)
         t = int(m.eq_type[i])
         if t in (E.mjEQ_CONNECT, E.mjEQ_WELD):
             if m.eq_objtype[i] == O.mjOBJ_SITE:
@@ -551,7 +549,7 @@ def cross_trees(m, regex, convex):
         troots.append(roots)
     for i in range(m.neq):  # a tendon equality couples its two tendons' trees
         o1, o2 = int(m.eq_obj1id[i]), int(m.eq_obj2id[i])
-        if m.eq_active0[i] and m.eq_type[i] == E.mjEQ_TENDON and o2 >= 0 and len(troots[o1] | troots[o2]) > 1:
+        if m.eq_type[i] == E.mjEQ_TENDON and o2 >= 0 and len(troots[o1] | troots[o2]) > 1:
             out.append(f'equality {i}')
     return out
 
@@ -712,11 +710,12 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
     return ints, floats, sizes
 
 
-EQH, EQF = 12, 31  # eq_block: ints and floats per equality constraint
+EQH, EQF = 13, 31  # eq_block: ints and floats per equality constraint
 
 
 def eq_rows(m, limits=True):
-    """Equality constraints that start active, of the ported kinds (connect, weld, joint, tendon), as dicts for eq_block.
+    """Every equality constraint of the ported kinds (connect, weld, joint, tendon), active or not (act: MuJoCo eq_active0, the
+    value d->eq_active resets to; the host may switch any of them per animal, -DEQACT=1), as dicts for eq_block.
     MuJoCo engine_core_constraint.c:513 mj_instantiateEquality: anchors by body semantic (connect: data[0:3] on obj1,
     data[3:6] on obj2; weld: data[3:6] on obj1, data[0:3] on obj2, relpose data[6:10], torquescale data[10]) or by site
     semantic (site_pos, site_quat of both); both reduce to a local anchor, a local quaternion and a body per side."""
@@ -747,10 +746,8 @@ def eq_rows(m, limits=True):
         return union
     out = []
     for i in range(m.neq):
-        if not m.eq_active0[i]:
-            continue
         t, o1, o2, d = int(m.eq_type[i]), int(m.eq_obj1id[i]), int(m.eq_obj2id[i]), m.eq_data[i]
-        e = dict(type=t, solref=m.eq_solref[i], solimp=m.eq_solimp[i], data=d[:5], qref=[0.0, 0.0], dof=[-1, -1], qadr=[-1, -1])
+        e = dict(type=t, act=int(m.eq_active0[i]), solref=m.eq_solref[i], solimp=m.eq_solimp[i], data=d[:5], qref=[0.0, 0.0], dof=[-1, -1], qadr=[-1, -1])
         if t in (E.mjEQ_CONNECT, E.mjEQ_WELD):
             site = m.eq_objtype[i] == O.mjOBJ_SITE
             b0, b1 = (m.site_bodyid[o1], m.site_bodyid[o2]) if site else (o1, o2)
@@ -808,7 +805,8 @@ def eq_rows(m, limits=True):
 
 def eq_block(m, eq, hrow):
     """Equality block (last in mi/mf): ints per constraint (type, body 0, body 1, rows, chain length, chain offset, first
-    row, Jacobian offset, dof 0, dof 1, qpos address 0, 1; connect and weld: the body whose floating origin is the frame), then every chain (H's row pattern of the deepest dof, so
+    row, Jacobian offset, dof 0, dof 1, qpos address 0, 1; connect and weld: the body whose floating origin is the frame; eq_active0, 1 for
+    a limit row), then every chain (H's row pattern of the deepest dof, so
     J' D J lands on H's rows by chain position, as the contact pairs do) and per chain dof a mask (1: in body 0's
     chain, 2: body 1's); floats per constraint: local anchors 0 and 1, local quaternions 0 and 1, torquescale, solref 2,
     solimp 5, inverse weight translation and rotation (joint: dof), joint polynomial data 5, joint qpos0 of both."""
@@ -818,7 +816,7 @@ def eq_block(m, eq, hrow):
     nrow = nje = 0
     for e in eq:
         chain = hrow[max(e['union'])]
-        head += [e['type'], *e['b'], e['size'], len(chain), len(chains), nrow, nje, *e['dof'], *e['qadr']]
+        head += [e['type'], *e['b'], e['size'], len(chain), len(chains), nrow, nje, *e['dof'], *e['qadr'], e.get('act', 1)]
         nrow, nje = nrow + e['size'], nje + e['size'] * len(chain)
         chains += chain
         masks += [(c in e['in0']) + 2 * (c in e['in1']) + 4 * is_quat(c) for c in chain]
@@ -836,6 +834,21 @@ def mocap_block(m):
     if not m.nmocap:
         return None
     return np.asarray(m.body_mocapid), np.zeros(0), {'NMOCAP': m.nmocap}
+
+
+def with_inactive(mjcf, out, every=2):
+    """mjcf with every `every`-th equality (from the first) inactive at start (active="false", eq_active0 0), mesh paths made absolute;
+    written to `out`; returns the path. The gate bodies of check.sh eqact_runtime: the export carries them, the host may switch them on."""
+    spec = mujoco.MjSpec.from_file(str(mjcf))
+    base = Path(mjcf).parent / (spec.meshdir or '')
+    for mesh in spec.meshes:
+        mesh.file = str((base / mesh.file).resolve()) if mesh.file else mesh.file
+    spec.meshdir = ''
+    for i, e in enumerate(spec.equalities):
+        e.active = i % every != 0
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(spec.to_xml())
+    return str(out)
 
 
 def with_tendon_limits(mjcf, out, count=256, lo=0.35, hi=0.65, solref=0.02, tolerance=None):
@@ -1676,13 +1689,10 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
             np.add.at(X[n], xb[n], xw[n])  # two slots on one body add, as the engine's slots do
         ub = np.concatenate([u, np.concatenate([xb[..., None], xw], axis=2).reshape(count, -1)], axis=1)
         ref = lambda *a, X=X: reference_fresh(*a, xfrc=X)
-    eqact = bool(os.environ.get('EQACT'))  # EQACT=1: every exported equality on or off at random per state, ctrl.bin rows after the push slots (-DEQACT=1)
+    eqact = bool(os.environ.get('EQACT'))  # EQACT=1: every equality (inactive at start too) on or off at random per state, ctrl.bin rows after the push slots (-DEQACT=1)
     if eqact:
-        live = np.flatnonzero(m.eq_active0)  # the exported equalities, in export order
-        E = np.random.default_rng(5).integers(0, 2, (count, len(live))).astype(float)
-        A = np.zeros((count, m.neq))
-        A[:, live] = E
-        ub = np.concatenate([ub, E], axis=1)
+        A = np.random.default_rng(5).integers(0, 2, (count, m.neq)).astype(float)  # every equality is exported, in MuJoCo's order
+        ub = np.concatenate([ub, A], axis=1)
         ref = lambda *a, X=(X if nxf else None), A=A: reference_fresh(*a, xfrc=X, eqact=A)
     ub.astype(np.float32).T.copy().tofile(out / 'ctrl.bin')  # (nu + 7 nmocap + 7 nxf + neq if EQACT, flies); zeros below the actuated stage
     if feet:  # only the exported pairs collide; actuators off below S3

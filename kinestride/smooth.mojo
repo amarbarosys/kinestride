@@ -109,7 +109,7 @@ comptime NEQR = get_defined_int["NEQR", 0]()  # rows: connect 3, weld 6, joint 1
 comptime NEQB = get_defined_int["NEQB", 0]()  # bilateral rows; a row r >= NEQB (tendon limit) costs 0.5 D jar^2 only while jar < 0
 comptime NEQCH = get_defined_int["NEQCH", 0]()
 comptime NEQJ = get_defined_int["NEQJ", 0]()  # Jacobian entries: rows x chain length, summed
-comptime EQH = 12
+comptime EQH = 13  # the 13th: MuJoCo eq_active0 (1 for a limit row)
 comptime EQF = 31
 comptime NMM = get_defined_int["NMM", 0]() == 1  # a mesh-mesh pair exists: per pair geom1's hull vertex and first-edge offsets after the convex block
 comptime CEQH = NI2 + ((6 if NMM else 4) * NCP if NCV > 0 else 0)  # the convex block (kind, two shape kinds, condim per pair) sits between the tendon and equality blocks
@@ -1961,8 +1961,8 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             B = 2 / max(Float32(1e-15), s1 * ref0)
         else:  # direct: B = -solref[1] / d_width
             B = -ref1 / max(Float32(1e-15), s1)
-        var on = Float32(1)
-        comptime if EQACT:  # an inactive equality's rows get D = 0: no force, no Hessian term, no cost (MuJoCo drops them)
+        var on = Float32(Int(mi[eh + 12]))  # MuJoCo eq_active0: d->eq_active's reset value, the state without -DEQACT
+        comptime if EQACT:  # an inactive equality's rows get D = 0: no force, no Hessian term, no cost (MuJoCo drops them); the host's row wins
             on = ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]
         for k in range(size):
             var row = rbase + k

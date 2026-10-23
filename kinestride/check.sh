@@ -169,6 +169,31 @@ if [ "$stage" = eqact ]; then  # per-animal equality on/off (-DEQACT=1: random 0
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all eqact checks"; exit 0
 fi
+if [ "$stage" = eqact_runtime ]; then  # runtime eq_active (mj_instantiateEquality skips an equality while !d->eq_active[i], engine_core_constraint.c):
+  # every equality is exported, inactive-at-start ones too (eq_active0, the equality block's 13th int); without -DEQACT the engine holds
+  # eq_active0, with it the host's ctrl.bin rows switch any equality per animal between launches. Bodies through model.with_inactive (every
+  # other equality inactive at start): models/eq_test.xml (connect, weld, joint; body and site), the spider with two fixed-tendon equalities
+  # (default bar), the fly with tendon equalities on spatial tendons (REL=2e-3, tendon_eq's fly bar). eqact_rollout: 12 K=1 launches, the
+  # host flips a third of every animal's equalities every 3 launches, the engine's state carried. CPU engine; the card once (fixture, EQACT=1).
+  export CPU=1; mkdir -p $X/eqr
+  EF=$($M -c "from kinestride.model import with_inactive; print(with_inactive('kinestride/models/eq_test.xml', '$X/eqr/fixture.xml'))")
+  ES=$($M -c "from kinestride.model import with_inactive, with_tendon_equalities; print(with_inactive(with_tendon_equalities('kinestride/models/spider_test.xml', '$X/eqr/spider0.xml', tolerance=0, fixed=True), '$X/eqr/spider.xml'))")
+  EY=$($M -c "from kinestride.model import with_inactive, with_spatial_tendons, with_tendon_equalities; print(with_inactive(with_tendon_equalities(with_spatial_tendons('${BODY:-.work/assets/fly/body.xml}', '$X/eqr/fly0.xml'), '$X/eqr/fly1.xml', tolerance=0), '$X/eqr/fly.xml'))")
+  for a in "" 1; do  # EQACT unset: eq_active0 held; EQACT=1: random on/off per equality per state
+    EQACT=$a $M -m kinestride.model check $EF $X/eqr/fixture$a equality 64 || { echo "FAIL eqact_runtime fixture EQACT=$a"; fail=$((fail+1)); }
+    EQACT=$a $M -m kinestride.model check $ES $X/eqr/spider$a tendon_eq 64 || { echo "FAIL eqact_runtime spider EQACT=$a"; fail=$((fail+1)); }
+    EQACT=$a REL=2e-3 $M -m kinestride.model check $EY $X/eqr/fly$a tendon_eq 64 || { echo "FAIL eqact_runtime fly EQACT=$a"; fail=$((fail+1)); }
+  done
+  $M -m kinestride.eqact_rollout $EF $X/eqr/rollout 64 12 || { echo "FAIL eqact_runtime rollout"; fail=$((fail+1)); }
+  # the gate must fail with: eq_active0 ignored (every equality on without -DEQACT), the host's row only switching off (initial-only, U4)
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/var on = Float32(Int(mi\[eh + 12\]))/var on = Float32(1)/' -- \
+    $M -m kinestride.model check $EF $X/mutant equality 64 || fail=$((fail+1))
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/            on = ctrl\[(NU + 7 \* NMOCAP + 7 \* NXF + e) \* F + f\]/            on *= ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]/' -- \
+    $M -m kinestride.eqact_rollout $EF $X/mutant 64 12 || fail=$((fail+1))
+  CPU=0 EQACT=1 $M -m kinestride.model check $EF $X/eqr/gpu equality 64 || { echo "FAIL eqact_runtime card"; fail=$((fail+1)); }
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all eqact_runtime checks"; exit 0
+fi
 if [ "$stage" = hfield ]; then  # exact heightfield contact (mjc_ConvexHField: GJK + EPA per cell prism, convex.mojo, CPU build) on a bumpy seeded terrain vs MuJoCo's own hfield geom
   $M -m kinestride.hfield_check 6000 f64 1 || { echo "FAIL hfield f64"; fail=$((fail+1)); }
   $M -m kinestride.hfield_check 6000 f32 1 || { echo "FAIL hfield f32"; fail=$((fail+1)); }
