@@ -623,6 +623,23 @@ if [ "$stage" = freefree ]; then  # contact pairs across two free bodies (two fl
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all freefree checks"; exit 0
 fi
+if [ "$stage" = pair_cross_animal ]; then  # explicit pairs between two articulated animals in one model (docs/plans/CROSS_ANIMAL.md):
+  # model.with_pair_animals: spider_test and a copy (prefix b_), gravity 0, the copy pushed into the animal; MuJoCo's rollout picks the
+  # touching pairs and 64 clean contact states (contacts in 56/64, no degenerate overlap; STATES=). Primitive pairs (CONVEX=1), both cones;
+  # bars from the contact stage's float32 input floor (MuJoCo moves qacc 1.5e-4 on rounded input: stiff contacts between light legs).
+  S=kinestride/smooth.mojo; mkdir -p $X/pa
+  PA=$($M -c "from kinestride.model import with_pair_animals; print(with_pair_animals('kinestride/models/spider_test.xml', '$X/pa/two.xml', '$X/pa/states.npz'))")
+  for c in 0 1; do
+    STATES=$X/pa/states.npz ENGINE_OPT=cone=$c CONVEX=1 STONES=1 CROSS_MIN=16 $M -m kinestride.model check $PA $X/pa/c$c contact 64 || { echo "FAIL pair_cross_animal cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: geom1's origin shift dropped (convex_pair, where the primitive pairs go), geom1's Jacobian side on geom2's com
+  for mut in 's/^        pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/        pos1 = pos1/' \
+             's/var off1 = cpos - com1/var off1 = cpos - com/'; do
+    STATES=$X/pa/states.npz ENGINE_OPT=cone=0 CONVEX=1 STONES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $PA $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all pair_cross_animal checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's

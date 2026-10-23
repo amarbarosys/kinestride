@@ -1136,6 +1136,66 @@ def spin_states(mjcf, out, count=64, seed=0):
     return str(out)
 
 
+def with_pair_animals(mjcf, out, states_out, count=64, seed=0):
+    """mjcf plus a copy of its animal (prefix b_, its plane dropped) for check.sh pair_cross_animal: gravity 0, joint limits off,
+    contacts by explicit pairs only. MuJoCo makes the contacts: with every primitive geom (sphere, capsule, ellipsoid) of one animal
+    paired with every one of the copy, the copy starts above the animal moving into it, and the rollout's states that carry a
+    contact and no degenerate overlap (centre_inside) are kept, `count` of them spread over the rollout, joint velocities redrawn
+    +-3 (qpos, qvel to `states_out`, the STATES= format). Only the pairs that touched in those states are written to `out`."""
+    def spec():
+        sp = mujoco.MjSpec.from_file(str(mjcf))
+        base = Path(mjcf).parent / (sp.meshdir or '')
+        for mesh in sp.meshes:
+            mesh.file = str((base / mesh.file).resolve()) if mesh.file else mesh.file
+        sp.meshdir = ''
+        for i, g in enumerate(sp.geoms):
+            g.contype = g.conaffinity = 0
+            g.name = g.name or f'g{i}'
+        for j in sp.joints:
+            j.limited = mujoco.mjtLimited.mjLIMITED_FALSE
+        sp.option.gravity = [0, 0, 0]
+        return sp
+    G = mujoco.mjtGeom
+    ext = float(spec().compile().stat.extent)
+    def build(names):
+        a = spec()
+        a.attach(spec(), frame=a.worldbody.add_frame(pos=[0, 0, 0.6 * ext]), prefix='b_')
+        for g in list(a.geoms):
+            if g.name.startswith('b_') and g.type == G.mjGEOM_PLANE:
+                a.delete(g)
+        for n1, n2 in names:
+            a.add_pair(geomname1=n1, geomname2='b_' + n2)
+        return a
+    m1 = spec().compile()
+    prim = [m1.geom(i).name for i in range(m1.ngeom) if m1.geom_type[i] in (G.mjGEOM_SPHERE, G.mjGEOM_CAPSULE, G.mjGEOM_ELLIPSOID) and m1.geom_bodyid[i] > 0]
+    m = build([(x, y) for x in prim for y in prim]).compile()
+    d = mujoco.MjData(m)
+    bv = m.jnt_dofadr[[j for j in range(m.njnt) if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE][1]]
+    d.qvel[bv + 2] = -0.5 * ext  # the copy moves down into the animal at half an extent per second
+    rng = np.random.default_rng(seed)
+    cand = []
+    for _ in range(int(3 / m.opt.timestep)):
+        mujoco.mj_step(m, d)
+        if d.ncon and not any(centre_inside(m, d, c) for c in d.contact[:d.ncon]):
+            cand.append((d.qpos.copy(), d.qvel.copy()))
+    if len(cand) < count:
+        raise SystemExit(f'FAIL with_pair_animals: {len(cand)} clean contact states in the rollout, {count} needed')
+    pick = [cand[k] for k in np.linspace(0, len(cand) - 1, count).astype(int)]
+    q = np.array([c[0] for c in pick])
+    v = np.array([c[1] for c in pick]) + rng.uniform(-3, 3, (count, m.nv)) * (m.dof_jntid >= 0)
+    used = set()
+    for n in range(count):
+        d.qpos[:], d.qvel[:] = q[n], v[n]
+        mujoco.mj_forward(m, d)
+        for c in d.contact[:d.ncon]:  # MuJoCo orders a contact's geoms by type: the copy's may come first
+            g1, g2 = m.geom(c.geom1).name, m.geom(c.geom2).name
+            used.add((g2, g1[2:]) if g1.startswith('b_') else (g1, g2[2:]))
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    Path(out).write_text(build(sorted(used)).to_xml())
+    np.savez(states_out, qpos=q, qvel=v)
+    return str(out)
+
+
 def with_sleep(mjcf, out, tolerance):
     """mjcf with sleeping enabled (opt.enableflags sleep, sleep_tolerance): the gate body of check.sh sleep. Mesh paths made absolute;
     written to `out`; returns the path."""
@@ -1816,12 +1876,13 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     ref = reference if m.opt.solver == mujoco.mjtSolver.mjSOL_NEWTON else reference_fresh  # see reference_fresh
     near = (stage in ('equality', 'mocap', 'tendon_limit', 'tendon_eq', 'joint_limit', 'frictionloss', 'tendon_friction') and os.environ.get('EQSPREAD') != 'far') or bool(os.environ.get('NEAR_STATES'))  # NEAR_STATES=1: nearby() poses for any stage (flight contacts at rest)
     far = not near
-    q, v = nearby(m, count) if near else standing(load(oracle) if oracle else m, count) if feet and not os.environ.get('RANDOM_STATES') else (states(m, count), velocities(m, count, scale=VSCALE))  # RANDOM_STATES=1: a contact body that flies (check.sh flight_contacts)
-    if feet and (os.environ.get('RANDOM_STATES') or os.environ.get('NEAR_STATES')):  # a body-body contact gate: no state with a degenerate overlap (reject_degenerate)
-        q4, v4 = nearby(m, 4 * count) if near else (states(m, 4 * count), velocities(m, 4 * count, scale=VSCALE))
-        q, v = reject_degenerate(m, q4, v4, count)
-    if (convex and not os.environ.get('STONES')) or os.environ.get('ARENA_STATES'):  # STONES: the model already carries its stones (model.stones), the standing rollout meets them; ARENA_STATES: the same states without the convex pairs (isolates what the pairs add)
-        q, v = arena(m, q, v)
+    if not os.environ.get('STATES'):  # saved states replace every draw below (skip the draws: a standing rollout or a rejection pass may not suit the saved body)
+        q, v = nearby(m, count) if near else standing(load(oracle) if oracle else m, count) if feet and not os.environ.get('RANDOM_STATES') else (states(m, count), velocities(m, count, scale=VSCALE))  # RANDOM_STATES=1: a contact body that flies (check.sh flight_contacts)
+        if feet and (os.environ.get('RANDOM_STATES') or os.environ.get('NEAR_STATES')):  # a body-body contact gate: no state with a degenerate overlap (reject_degenerate)
+            q4, v4 = nearby(m, 4 * count) if near else (states(m, 4 * count), velocities(m, 4 * count, scale=VSCALE))
+            q, v = reject_degenerate(m, q4, v4, count)
+        if (convex and not os.environ.get('STONES')) or os.environ.get('ARENA_STATES'):  # STONES: the model already carries its stones (model.stones), the standing rollout meets them; ARENA_STATES: the same states without the convex pairs (isolates what the pairs add)
+            q, v = arena(m, q, v)
     if os.environ.get('STATES'):  # saved states instead (e.g. grooming poses: legs on the head, .work/.../groom_states.npz)
         z = np.load(os.environ['STATES'])
         q, v = z['qpos'][:count], z['qvel'][:count]
