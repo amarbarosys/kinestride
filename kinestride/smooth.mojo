@@ -107,7 +107,7 @@ comptime NI2 = CSP + (3 * NWRAP + NTEN if SPATIAL else 0)
 comptime NEQ = get_defined_int["NEQ", 0]()
 comptime NEQR = get_defined_int["NEQR", 0]()  # rows: connect 3, weld 6, joint 1, then the tendon limit rows (unilateral)
 comptime NEQB = get_defined_int["NEQB", 0]()  # bilateral rows; a row r >= NEQL (joint or tendon limit) costs 0.5 D jar^2 only while jar < 0
-comptime NEQL = get_defined_int["NEQL", NEQB]()  # rows NEQB..NEQL: dof friction loss (mj_instantiateFriction), Huber cost bounded by frictionloss
+comptime NEQL = get_defined_int["NEQL", NEQB]()  # rows NEQB..NEQL: dof then tendon friction loss (mj_instantiateFriction), Huber cost bounded by frictionloss
 comptime NEQFE = get_defined_int["NEQFE", 0]()  # the equality of friction row NEQB (one row per friction constraint)
 comptime NEQCH = get_defined_int["NEQCH", 0]()
 comptime NEQJ = get_defined_int["NEQJ", 0]()  # Jacobian entries: rows x chain length, summed
@@ -1824,6 +1824,11 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             for c in range(nch):
                 res[(jb + c) * F + f] = Float32(1) if Int(mi[CEQC + choff + c]) == dof else Float32(0)
             posn = 0
+        elif typ == 7:  # tendon friction loss (mj_instantiateFriction, engine_core_constraint.c:1240): J = ten_J, pos 0
+            var t = Int(mi[eh + 8])
+            for c in range(nch):
+                res[(jb + c) * F + f] = ten_j(mi, mf, res, f, t, Int(mi[CEQC + choff + c]))
+            posn = 0
         elif typ == 4:  # joint limit (mj_instantiateLimit): dist = side (range - qpos), a row while dist < margin, J = -side on the joint's dof
             var dof = Int(mi[eh + 8]); var side = Float32(Int(mi[eh + 9]))
             var dist = side * (mf[ef + 24] - qpos[Int(mi[eh + 10]) * F + f])
@@ -1990,7 +1995,7 @@ def cone_fric(mf: TF, p: Int) -> V3:
 
 @always_inline
 def floss(mf: TF, r: Int) -> Float32:
-    """Friction-loss row r (NEQB <= r < NEQL): its dof_frictionloss; with R = 1 / D the row is quadratic while -R floss < jar < R floss."""
+    """Friction-loss row r (NEQB <= r < NEQL): its dof or tendon frictionloss; with R = 1 / D the row is quadratic while -R floss < jar < R floss."""
     return mf[CEQF + EQF * (NEQFE + r - NEQB) + 24]
 
 

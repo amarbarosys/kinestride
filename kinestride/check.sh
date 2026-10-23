@@ -527,8 +527,9 @@ if [ "$stage" = tendon_eq ]; then  # tendon equality rows (mjEQ_TENDON, mj_insta
 fi
 if [ "$stage" = frictionloss ]; then  # dof friction-loss rows (mj_instantiateFriction, engine_core_constraint.c:1207) on the equality block, Huber
   # cost in Newton (quadratic inside +-R frictionloss, linear outside): the fly and the spider with a frictionloss on every joint at a
-  # quantile of the force its rows take unbounded (model.with_frictionloss; spider 0.5: 10 % quadratic, 90 % on either bound; fly 0.05:
-  # 78 % quadratic, the rest on both bounds), contacts and limits off, noslip 0, tolerance 0, vs mj_step.
+  # quantile of the force its rows take unbounded (model.with_frictionloss; zones from the final jar, negative/quadratic/positive rows
+  # over 64 states: spider 0.5 653/1780/703, fly 0.05 1290/1619/1827; MuJoCo's efc_state after mj_forward is stale on friction rows,
+  # never count zones from it), contacts and limits off, noslip 0, tolerance 0, vs mj_step.
   S=kinestride/smooth.mojo; mkdir -p $X/fl
   FF=$($M -c "from kinestride.model import with_frictionloss; print(with_frictionloss('${BODY:-.work/assets/fly/body.xml}', '$X/fl/fly.xml', quantile=0.05, tolerance=0))")
   SF=$($M -c "from kinestride.model import with_frictionloss; print(with_frictionloss('kinestride/models/spider_test.xml', '$X/fl/spider.xml', tolerance=0))")
@@ -543,6 +544,30 @@ if [ "$stage" = frictionloss ]; then  # dof friction-loss rows (mj_instantiateFr
   done
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all frictionloss checks"; exit 0
+fi
+if [ "$stage" = tendon_friction ]; then  # tendon friction-loss rows (mj_instantiateFriction, engine_core_constraint.c:1240) after the dof
+  # rows on the equality block, J = ten_J: models/tendon_spatial.xml (spatial and fixed tendons), the spider with one fixed tendon
+  # (the non-spatial ten_J path), the fly and the spider with three spatial tendons; every tendon's frictionloss at the median of the
+  # force its row would take alone (model.with_tendon_friction; zones from the final jar, negative/quadratic/positive rows over 64
+  # states: fixture 35/300/49, fixed 21/28/15, fly 104/13/75, spider 35/116/41), contacts, limits and joint friction off, noslip 0, tolerance 0.
+  S=kinestride/smooth.mojo; mkdir -p $X/tf
+  TF=$($M -c "from kinestride.model import with_tendon_friction; print(with_tendon_friction('kinestride/models/tendon_spatial.xml', '$X/tf/fixture.xml', tolerance=0))")
+  XF=$($M -c "from kinestride.model import with_tendon_friction; print(with_tendon_friction('kinestride/models/spider_test.xml', '$X/tf/fixed.xml', tolerance=0, fixed=True))")
+  FT=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_friction; print(with_tendon_friction(with_spatial_tendons('${BODY:-.work/assets/fly/body.xml}', '$X/tf/fly0.xml'), '$X/tf/fly.xml', tolerance=0))")
+  ST=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_friction; print(with_tendon_friction(with_spatial_tendons('kinestride/models/spider_test.xml', '$X/tf/spider0.xml'), '$X/tf/spider.xml', tolerance=0))")
+  for B in $TF $XF $FT; do
+    $M -m kinestride.model check $B $X/tf/$(basename $B .xml) tendon_friction 64 || { echo "FAIL tendon_friction $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  # the spider's spatial ten_J carries its own float32 error, 1.15e-5 (spatial(), the same figure tendon_limit measured), and qacc
+  # follows it (1.40e-5): bar 2e-5 there
+  REL=2e-5 $M -m kinestride.model check $ST $X/tf/spider tendon_friction 64 || { echo "FAIL tendon_friction spider"; fail=$((fail+1)); }
+  # the gate must fail with: the tendon Jacobian doubled, a tendon row taken for a dof row (J = 1 on dof t)
+  for mut in 's/res\[(jb + c) \* F + f\] = ten_j(mi, mf, res, f, t, Int(mi\[CEQC + choff + c\]))$/res[(jb + c) * F + f] = 2 * ten_j(mi, mf, res, f, t, Int(mi[CEQC + choff + c]))/' \
+             's/        if typ == 6:  # dof friction loss/        if typ == 6 or typ == 7:  # dof friction loss/'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $TF $X/mutant tendon_friction 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all tendon_friction checks"; exit 0
 fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
