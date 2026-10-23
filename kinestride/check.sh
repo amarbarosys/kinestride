@@ -82,8 +82,8 @@ if [ "$stage" = city ]; then  # the endless city (city.mojo, CPU build): point m
   echo "PASS all city checks"; exit 0
 fi
 if [ "$stage" = living ]; then  # Living World ground (living.mojo, CPU build): nodes, torus wrap, lw_hit vs a brute march
-  WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/web/world.bin}
-  WEB=$(cd "$(dirname "$WB")/.." && node -e "import('./web/world.mjs').then(m => console.log(m.TREE_CONES.flatMap(c => [...c, [0, 0, 0]].slice(0, 2).flat()).join(',')))")
+  WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/world/world.bin}  # living-world 4709966 moved web/ to world/
+  WEB=$(cd "$(dirname "$WB")" && node -e "import('./world.mjs').then(m => console.log(m.TREE_CONES.flatMap(c => [...c, [0, 0, 0]].slice(0, 2).flat()).join(',')))")
   C="mojo build -I kinestride kinestride/living_check.mojo -o $X/living/check && $X/living/check $WB $WEB"
   mkdir -p $X/living; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL living check"; fail=$((fail+1)); }
   for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/CROWN = SIMD\[DType.float32, 8\](0.085,/CROWN = SIMD[DType.float32, 8](0.17,/' 's/F4(0.65, 1, 0.2, 1) if part == 0/F4(0.3, 1, 0.2, 1) if part == 0/' 's/if mx < my:/if mx > my:/' 's/% tn \* tn + ((i % tn)/% tn * n + ((i % tn)/'; do
