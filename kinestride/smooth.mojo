@@ -106,7 +106,9 @@ comptime NI2 = CSP + (3 * NWRAP + NTEN if SPATIAL else 0)
 # equality constraints (model.py eq_block, last block): per constraint 12 ints, then every chain, then its masks
 comptime NEQ = get_defined_int["NEQ", 0]()
 comptime NEQR = get_defined_int["NEQR", 0]()  # rows: connect 3, weld 6, joint 1, then the tendon limit rows (unilateral)
-comptime NEQB = get_defined_int["NEQB", 0]()  # bilateral rows; a row r >= NEQB (tendon limit) costs 0.5 D jar^2 only while jar < 0
+comptime NEQB = get_defined_int["NEQB", 0]()  # bilateral rows; a row r >= NEQL (joint or tendon limit) costs 0.5 D jar^2 only while jar < 0
+comptime NEQL = get_defined_int["NEQL", NEQB]()  # rows NEQB..NEQL: dof friction loss (mj_instantiateFriction), Huber cost bounded by frictionloss
+comptime NEQFE = get_defined_int["NEQFE", 0]()  # the equality of friction row NEQB (one row per friction constraint)
 comptime NEQCH = get_defined_int["NEQCH", 0]()
 comptime NEQJ = get_defined_int["NEQJ", 0]()  # Jacobian entries: rows x chain length, summed
 comptime EQH = 13  # the 13th: MuJoCo eq_active0 (1 for a limit row)
@@ -1817,7 +1819,12 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
         var cpos = S6(0)
         var jdv = S6(0)  # Jdot qvel of the rows, subtracted from aref
         var posn: Float32
-        if typ == 4:  # joint limit (mj_instantiateLimit): dist = side (range - qpos), a row while dist < margin, J = -side on the joint's dof
+        if typ == 6:  # dof friction loss (mj_instantiateFriction, engine_core_constraint.c:1207): J = 1 on the dof, pos 0 (so K drops out)
+            var dof = Int(mi[eh + 8])
+            for c in range(nch):
+                res[(jb + c) * F + f] = Float32(1) if Int(mi[CEQC + choff + c]) == dof else Float32(0)
+            posn = 0
+        elif typ == 4:  # joint limit (mj_instantiateLimit): dist = side (range - qpos), a row while dist < margin, J = -side on the joint's dof
             var dof = Int(mi[eh + 8]); var side = Float32(Int(mi[eh + 9]))
             var dist = side * (mf[ef + 24] - qpos[Int(mi[eh + 10]) * F + f])
             var on = dist < mf[ef + 25]
@@ -1981,6 +1988,19 @@ def cone_fric(mf: TF, p: Int) -> V3:
     return V3(f0 / sqrt(max(Float32(1e-15), mf[COPT])), f0, mf[CPF + 14 * p + 3], 0)
 
 
+@always_inline
+def floss(mf: TF, r: Int) -> Float32:
+    """Friction-loss row r (NEQB <= r < NEQL): its dof_frictionloss; with R = 1 / D the row is quadratic while -R floss < jar < R floss."""
+    return mf[CEQF + EQF * (NEQFE + r - NEQB) + 24]
+
+
+@always_inline
+def fquad(mf: TF, res: TO, f: Int, r: Int, jar: Float32) -> Bool:
+    """MuJoCo mjCNSTRSTATE_QUADRATIC of friction row r at jar (mj_constraintUpdate_impl, engine_core_constraint.c:3100)."""
+    var Rf = floss(mf, r) / get(res, f, OEQD + r)
+    return -Rf < jar and jar < Rf
+
+
 def update_cone(mi: TI, mf: TF, res: TO, f: Int) -> Float32:
     """MuJoCo mj_constraintUpdate_impl, elliptic contacts (engine_core_constraint.c:3155): U = (mu jar0, f0 jar1, f1 jar2), N = U0,
     T = |U1 U2|; top zone (N >= mu T): no force, state 0; bottom zone (mu N + T <= 0): quadratic, state 1; middle: cost
@@ -2052,17 +2072,24 @@ def update(mi: TI, mf: TF, res: TO, f: Int) -> Float32:
                     for c in range(nch):
                         var v = Int(mi[CCHAIN + choff + c])
                         res[(OQFC + v) * F + f] += get(res, f, jadr + c) * force
-    comptime if NEQ > 0:  # equality rows are always active (quadratic); a tendon limit row only while jar < 0
+    comptime if NEQ > 0:  # equality rows are always active (quadratic); a limit row only while jar < 0; a friction row linear outside +-R floss
         for e in range(NEQ):
             var eh = CEQH + EQH * e
             var nch = Int(mi[eh + 4]); var choff = Int(mi[eh + 5]); var rbase = Int(mi[eh + 6]); var jb = OEQJ + Int(mi[eh + 7])
             for k in range(Int(mi[eh + 3])):
-                var jar = get(res, f, OEQJAR + rbase + k)
-                if rbase + k >= NEQB and jar >= 0:
+                var r = rbase + k
+                var jar = get(res, f, OEQJAR + r)
+                if r >= NEQL and jar >= 0:
                     continue
-                var D = get(res, f, OEQD + rbase + k)
-                cost += 0.5 * D * jar * jar
+                var D = get(res, f, OEQD + r)
                 var force = -D * jar
+                if r >= NEQB and r < NEQL and not fquad(mf, res, f, r, jar):  # linear negative (jar <= -R floss) or positive
+                    var fl = floss(mf, r)
+                    var R = 1 / D
+                    force = fl if jar < 0 else -fl
+                    cost += -0.5 * R * fl * fl + (-fl * jar if jar < 0 else fl * jar)
+                else:
+                    cost += 0.5 * D * jar * jar
                 for c in range(nch):
                     res[(OQFC + Int(mi[CEQC + choff + c])) * F + f] += get(res, f, jb + k * nch + c) * force
     for v in range(NV):
@@ -2129,12 +2156,15 @@ def hessian(mi: TI, mf: TF, res: TO, f: Int):
                     var ra = Int(mi[HADR + d])
                     for bb in range(a + 1):
                         res[(OHN + ra + bb) * F + f] += ja * get(res, f, jadr + bb)
-    comptime if NEQ > 0:  # equality rows: always in H; a tendon limit row while jar < 0
+    comptime if NEQ > 0:  # equality rows: always in H; a limit row while jar < 0; a friction row while quadratic
         for e in range(NEQ):
             var eh = CEQH + EQH * e
             var nch = Int(mi[eh + 4]); var choff = Int(mi[eh + 5]); var rbase = Int(mi[eh + 6]); var jb = OEQJ + Int(mi[eh + 7])
             for k in range(Int(mi[eh + 3])):
-                if rbase + k >= NEQB and get(res, f, OEQJAR + rbase + k) >= 0:
+                var r = rbase + k
+                if r >= NEQL and get(res, f, OEQJAR + r) >= 0:
+                    continue
+                if r >= NEQB and r < NEQL and not fquad(mf, res, f, r, get(res, f, OEQJAR + r)):
                     continue
                 var D = get(res, f, OEQD + rbase + k)
                 var jadr = jb + k * nch
@@ -2279,10 +2309,20 @@ def peval(mi: TI, mf: TF, res: TO, f: Int, gauss: PNT, alpha: Float32) -> PNT:
                 q0 += 0.5 * D * jar * jar
                 q1 += jv * D * jar
                 q2 += 0.5 * jv * D * jv
-    comptime if NEQ > 0:  # equality rows: active at every alpha; a tendon limit row where jar + alpha jv < 0
+    comptime if NEQ > 0:  # equality rows: active at every alpha; a limit row where jar + alpha jv < 0; a friction row linear outside +-R floss
         for r in range(lane(), NEQR, LN):
             var jar = get(res, f, OEQJAR + r); var jv = get(res, f, OEQJV + r); var D = get(res, f, OEQD + r)
-            if r >= NEQB and jar + alpha * jv >= 0:
+            if r >= NEQL and jar + alpha * jv >= 0:
+                continue
+            if r >= NEQB and r < NEQL and not fquad(mf, res, f, r, jar + alpha * jv):  # PrimalEval (engine_solver.c:1335)
+                var fl = floss(mf, r)
+                var Rf = fl / D
+                if jar + alpha * jv <= -Rf:
+                    q0 += fl * (-0.5 * Rf - jar)
+                    q1 += -fl * jv
+                else:
+                    q0 += fl * (-0.5 * Rf + jar)
+                    q1 += fl * jv
                 continue
             q0 += 0.5 * D * jar * jar
             q1 += jv * D * jar
@@ -2631,9 +2671,15 @@ def newton(mi: TI, mf: TF, res: TO, f: Int):
         comptime if NEQ > 0:
             for r in range(NEQR):
                 var was = get(res, f, OEQJAR + r) < 0
+                var wasq = False
+                comptime if NEQL > NEQB:
+                    wasq = r >= NEQB and r < NEQL and fquad(mf, res, f, r, get(res, f, OEQJAR + r))
                 res[(OEQJAR + r) * F + f] += alpha * get(res, f, OEQJV + r)
-                if r >= NEQB and (get(res, f, OEQJAR + r) < 0) != was:  # a tendon limit row entered or left H: lowrank covers contacts only
+                if r >= NEQL and (get(res, f, OEQJAR + r) < 0) != was:  # a limit row entered or left H: lowrank covers contacts only
                     eqflip = True
+                comptime if NEQL > NEQB:
+                    if r >= NEQB and r < NEQL and fquad(mf, res, f, r, get(res, f, OEQJAR + r)) != wasq:  # a friction row entered or left H
+                        eqflip = True
         var cheap = True
         comptime if ELL:  # the cone Hessian moves with jar: rebuilt every iteration, no rank-1 shortcut
             changed = True
@@ -2861,7 +2907,7 @@ def noslip(mi: TI, mf: TF, res: TO, f: Int):
         res[(OFRC + r) * F + f] = fr
     comptime if NEQ > 0:  # solNoSlip's iteration-0 correction sums every row, equality rows included (a tendon limit row while jar < 0)
         for r in range(NEQR):
-            if r >= NEQB and get(res, f, OEQJAR + r) >= 0:
+            if r >= NEQL and get(res, f, OEQJAR + r) >= 0:
                 continue
             imp0 += 0.5 * get(res, f, OEQD + r) * get(res, f, OEQJAR + r) * get(res, f, OEQJAR + r)
     for v in range(NV):

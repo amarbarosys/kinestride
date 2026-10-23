@@ -489,7 +489,7 @@ if [ "$stage" = tendon_limit ]; then  # tendon limit rows (mj_instantiateLimit, 
   # the gate must fail with: the limit side flipped, the margin dropped, the row made bilateral (force while jar >= 0), the Jacobian sign dropped
   for mut in 's/var dist = side \* (mf\[ef + 24\] - L)/var dist = -side * (mf[ef + 24] - L)/' \
              's/cpos\[0\] = dist - mf\[ef + 25\]/cpos[0] = dist/' \
-             's/if rbase + k >= NEQB and jar >= 0:/if False:/' \
+             's/if r >= NEQL and jar >= 0:/if False:/' \
              's/= -side \* ten_j(mi, mf, res, f, t, Int(mi\[CEQC + choff + c\])) if on/= side * ten_j(mi, mf, res, f, t, Int(mi[CEQC + choff + c])) if on/'; do
     ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $TS $X/mutant tendon_limit 64 || fail=$((fail+1))
   done
@@ -524,6 +524,25 @@ if [ "$stage" = tendon_eq ]; then  # tendon equality rows (mjEQ_TENDON, mj_insta
     $M -m kinestride.model check $ST $X/mutant tendon_eq 64 || fail=$((fail+1))
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all tendon_eq checks"; exit 0
+fi
+if [ "$stage" = frictionloss ]; then  # dof friction-loss rows (mj_instantiateFriction, engine_core_constraint.c:1207) on the equality block, Huber
+  # cost in Newton (quadratic inside +-R frictionloss, linear outside): the fly and the spider with a frictionloss on every joint at a
+  # quantile of the force its rows take unbounded (model.with_frictionloss; spider 0.5: 10 % quadratic, 90 % on either bound; fly 0.05:
+  # 78 % quadratic, the rest on both bounds), contacts and limits off, noslip 0, tolerance 0, vs mj_step.
+  S=kinestride/smooth.mojo; mkdir -p $X/fl
+  FF=$($M -c "from kinestride.model import with_frictionloss; print(with_frictionloss('${BODY:-.work/assets/fly/body.xml}', '$X/fl/fly.xml', quantile=0.05, tolerance=0))")
+  SF=$($M -c "from kinestride.model import with_frictionloss; print(with_frictionloss('kinestride/models/spider_test.xml', '$X/fl/spider.xml', tolerance=0))")
+  for B in $FF $SF; do
+    $M -m kinestride.model check $B $X/fl/$(basename $B .xml) frictionloss 64 || { echo "FAIL frictionloss $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the linear-zone force sign flipped, the zone bound without R, the line search's linear slope sign flipped
+  for mut in 's/force = fl if jar < 0 else -fl/force = -fl if jar < 0 else fl/' \
+             's/var Rf = floss(mf, r) \/ get(res, f, OEQD + r)/var Rf = floss(mf, r)/' \
+             's/q1 += -fl \* jv/q1 += fl * jv/'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $SF $X/mutant frictionloss 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all frictionloss checks"; exit 0
 fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
