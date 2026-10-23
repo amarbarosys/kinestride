@@ -463,6 +463,32 @@ if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instanti
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all joint_limit checks"; exit 0
 fi
+if [ "$stage" = solref_direct ]; then  # direct solref (-stiffness, -damping) on equality, joint limit and tendon limit rows (mj_makeImpedance,
+  # getsolparam: K = -solref[0] / d_width^2, B = -solref[1] / d_width, no refsafe; a mixed format becomes the default 0.02 1). ENGINE_OPT
+  # rowsolref sets eq_solref, jnt_solref and tendon_solref_lim on the model the engine and MuJoCo both load. eq_test.xml at -2500:-100 (about
+  # its default 0.02 1 at d_width 0.95) and mixed 0.1:-20, default bar; the fly and spider joint limits and the soft tendon fixture and the
+  # spider's spatial tendon limits at -100:-20 (about the 0.1 1 of joint_limit and tendon_limit), their bars.
+  S=kinestride/smooth.mojo; mkdir -p $X/sd; E=kinestride/models/eq_test.xml
+  FJ=$($M -c "from kinestride.model import with_joint_limits; print(with_joint_limits('${BODY:-.work/assets/fly/body.xml}', '$X/sd/fly.xml', solref=0.1, tolerance=0))")
+  SJ=$($M -c "from kinestride.model import with_joint_limits; print(with_joint_limits('kinestride/models/spider_test.xml', '$X/sd/spider.xml', solref=0.1, tolerance=0))")
+  TS=$($M -c "from kinestride.model import with_tendon_limits; print(with_tendon_limits('kinestride/models/tendon_spatial.xml', '$X/sd/soft.xml', solref=0.1, tolerance=0))")
+  ST=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_limits; print(with_tendon_limits(with_spatial_tendons('kinestride/models/spider_test.xml', '$X/sd/spider_t0.xml'), '$X/sd/spider_t.xml', solref=0.1, tolerance=0))")
+  ENGINE_OPT=rowsolref=-2500:-100 $M -m kinestride.model check $E $X/sd/eq equality 64 || { echo "FAIL solref_direct equality"; fail=$((fail+1)); }
+  ENGINE_OPT=rowsolref=0.1:-20 $M -m kinestride.model check $E $X/sd/eqmix equality 64 || { echo "FAIL solref_direct equality mixed"; fail=$((fail+1)); }
+  for B in $FJ $SJ; do
+    ENGINE_OPT=rowsolref=-100:-20 REL=2e-3 $M -m kinestride.model check $B $X/sd/$(basename $B .xml) joint_limit 64 || { echo "FAIL solref_direct joint_limit $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  ENGINE_OPT=rowsolref=-100:-20 $M -m kinestride.model check $TS $X/sd/soft tendon_limit 64 || { echo "FAIL solref_direct tendon_limit soft"; fail=$((fail+1)); }
+  ENGINE_OPT=rowsolref=-100:-20 REL=2e-3 $M -m kinestride.model check $ST $X/sd/spider_t tendon_limit 64 || { echo "FAIL solref_direct tendon_limit spider"; fail=$((fail+1)); }
+  # the gate must fail with: refsafe applied to the direct format, the direct damping sign flipped, d_width dropped from the direct stiffness
+  for mut in 's/var ref0 = mf\[ef + 15\] if mf\[ef + 15\] <= 0 else max(mf\[ef + 15\], 2 \* h)/var ref0 = max(mf[ef + 15], 2 * h)/' \
+             's/B = -ref1 \/ max(Float32(1e-15), s1)/B = ref1 \/ max(Float32(1e-15), s1)/' \
+             's/K = -ref0 \/ max(Float32(1e-15), s1 \* s1)/K = -ref0/'; do
+    ENGINE_OPT=rowsolref=-2500:-100 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $E $X/mutant equality 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all solref_direct checks"; exit 0
+fi
 if [ "$stage" = flight_contacts ]; then  # the Flybody flight model's own contacts: 842 automatic capsule/ellipsoid/cylinder/sphere body-body pairs
   # (model.with_auto_pairs: the same pairs and mixed parameters as explicit pairs; tools/auto_pairs_check.py proves them against MuJoCo's dynamic
   # pairs; up to 5 contacts per capsule/cylinder pair from mjc_Convex's perturbation search, two for parallel capsules), condim 1 (frictionless rows), noslip 5, pyramidal. Narrowphase

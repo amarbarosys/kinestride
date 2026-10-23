@@ -314,6 +314,8 @@ def override(m):
             m.opt.timestep = float(val)
         elif key == 'solref':  # every pair's solref, 'a:b'; negative = MuJoCo's direct format (-stiffness, -damping)
             m.pair_solref[:] = [float(x) for x in val.split(':')]
+        elif key == 'rowsolref':  # every equality's solref, joint's solref and tendon's solref_lim, 'a:b' (check.sh solref_direct)
+            m.eq_solref[:] = m.jnt_solref[:] = m.tendon_solref_lim[:] = [float(x) for x in val.split(':')]
         elif key == 'kp':  # servo stiffness scale: explicit RK4 at the shipped kp (h 1e-4, light limbs) is unstable in MuJoCo itself
             joint = (m.actuator_trntype == mujoco.mjtTrn.mjTRN_JOINT) & (m.actuator_biastype == mujoco.mjtBias.mjBIAS_AFFINE)
             m.actuator_gainprm[joint, 0] *= float(val)
@@ -729,8 +731,6 @@ def eq_rows(m, limits=True):
         if not m.eq_active0[i]:
             continue
         t, o1, o2, d = int(m.eq_type[i]), int(m.eq_obj1id[i]), int(m.eq_obj2id[i]), m.eq_data[i]
-        if m.eq_solref[i][0] <= 0 or m.eq_solref[i][1] <= 0:
-            raise SystemExit(f'FAIL export: equality {i} has a direct (non-positive) solref; only the standard format is ported')
         e = dict(type=t, solref=m.eq_solref[i], solimp=m.eq_solimp[i], data=d[:5], qref=[0.0, 0.0], dof=[-1, -1], qadr=[-1, -1])
         if t in (E.mjEQ_CONNECT, E.mjEQ_WELD):
             site = m.eq_objtype[i] == O.mjOBJ_SITE
@@ -764,8 +764,6 @@ def eq_rows(m, limits=True):
     for j in lim:  # mj_instantiateLimit joint rows (engine_core_constraint.c), hinge and slide: dist = side (range - qpos), J = -side on the dof
         if m.jnt_type[j] not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
             raise SystemExit(f'FAIL export: joint {j} has a limit on a ball or free joint (only hinge and slide limits are ported)')
-        if m.jnt_solref[j][0] <= 0 or m.jnt_solref[j][1] <= 0:
-            raise SystemExit(f'FAIL export: joint {j} has a direct (non-positive) solref; only the standard format is ported')
         dof = int(m.jnt_dofadr[j])
         for side in (-1, 1):
             out.append(dict(type=4, solref=m.jnt_solref[j], solimp=m.jnt_solimp[j], b=[0, 0], size=1, union={dof}, a=[0.0] * 6,
@@ -775,8 +773,6 @@ def eq_rows(m, limits=True):
     for t in np.flatnonzero(m.tendon_limited):  # mj_instantiateLimit tendon rows (engine_core_constraint.c:1277), one per side, unilateral
         if m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator:
             raise SystemExit('FAIL export: tendon limits are gated with the Newton solver, the pyramidal cone and the Euler integrator only (check.sh tendon_limit)')
-        if m.tendon_solref_lim[t][0] <= 0 or m.tendon_solref_lim[t][1] <= 0:
-            raise SystemExit(f'FAIL export: tendon {t} has a direct (non-positive) solref_lim; only the standard format is ported')
         union = set()
         for w in range(m.tendon_adr[t], m.tendon_adr[t] + m.tendon_num[t]):
             wt, o = m.wrap_type[w], int(m.wrap_objid[w])
@@ -811,7 +807,8 @@ def eq_block(m, eq, hrow):
         nrow, nje = nrow + e['size'], nje + e['size'] * len(chain)
         chains += chain
         masks += [(c in e['in0']) + 2 * (c in e['in1']) + 4 * is_quat(c) for c in chain]
-        fl += [*e['a'], *e['s'], e['ts'], *e['solref'], *e['solimp'], *e['invw'], *e['data'], *e['qref']]
+        sr = e['solref'] if (e['solref'][0] > 0) == (e['solref'][1] > 0) else (0.02, 1.0)  # mixed format: MuJoCo's default (getsolparam); direct (-k, -b) kept
+        fl += [*e['a'], *e['s'], e['ts'], *sr, *e['solimp'], *e['invw'], *e['data'], *e['qref']]
     if any(a['type'] >= 3 and b['type'] < 3 for a, b in zip(eq, eq[1:])):
         raise SystemExit('FAIL export: limit rows (joint, tendon) must follow the bilateral equality rows')
     return (np.array(head + chains + masks), np.array(fl),

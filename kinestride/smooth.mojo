@@ -1922,12 +1922,20 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
                 sq += cpos[3] * cpos[3] + cpos[4] * cpos[4] + cpos[5] * cpos[5]
             posn = sqrt(sq)
         # mj_diagApprox, getsolparam, getimpedance, makeImpedance, referenceConstraint
-        var ref0 = max(mf[ef + 15], 2 * h); var ref1 = mf[ef + 16]
+        # getsolparam: refsafe on the standard format only (a mixed format arrives as the default from the export); non-positive = direct
+        var ref0 = mf[ef + 15] if mf[ef + 15] <= 0 else max(mf[ef + 15], 2 * h); var ref1 = mf[ef + 16]
         var s0 = min(Float32(0.9999), max(Float32(1e-4), mf[ef + 17])); var s1 = min(Float32(0.9999), max(Float32(1e-4), mf[ef + 18]))
         var s2 = max(Float32(0), mf[ef + 19]); var s3 = min(Float32(0.9999), max(Float32(1e-4), mf[ef + 20])); var s4 = max(Float32(1), mf[ef + 21])
         var imp = impedance(s0, s1, s2, s3, s4, posn)
-        var K = 1 / max(Float32(1e-15), s1 * s1 * ref0 * ref0 * ref1 * ref1)
-        var B = 2 / max(Float32(1e-15), s1 * ref0)
+        var K: Float32; var B: Float32
+        if ref0 > 0:  # mj_makeImpedance standard: K = 1 / (d_width^2 timeconst^2 dampratio^2)
+            K = 1 / max(Float32(1e-15), s1 * s1 * ref0 * ref0 * ref1 * ref1)
+        else:  # direct: K = -solref[0] / d_width^2
+            K = -ref0 / max(Float32(1e-15), s1 * s1)
+        if ref1 > 0:  # standard: B = 2 / (d_width timeconst)
+            B = 2 / max(Float32(1e-15), s1 * ref0)
+        else:  # direct: B = -solref[1] / d_width
+            B = -ref1 / max(Float32(1e-15), s1)
         var on = Float32(1)
         comptime if EQACT:  # an inactive equality's rows get D = 0: no force, no Hessian term, no cost (MuJoCo drops them)
             on = ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]
