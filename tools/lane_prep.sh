@@ -5,7 +5,7 @@ set -euo pipefail
 wt=$1; repo=$3
 [ -e "$wt/.venv" ] || ln -s "$repo/.venv" "$wt/.venv"
 mkdir -p "$wt/.work"
-for d in assets assets-mojo mujoco-src; do
+for d in assets assets-mojo mujoco-src spider-body; do
   [ -e "$wt/.work/$d" ] || ln -s "$repo/.work/$d" "$wt/.work/$d"
 done
 mkdir -p "$wt/.work/port" "$wt/.work/briefs"
