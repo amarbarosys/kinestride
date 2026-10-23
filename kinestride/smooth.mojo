@@ -302,11 +302,13 @@ comptime OSOL = NROW2  # CG scratch (SOLVER 1 only): M^-1 grad, then grad and M^
 comptime OCGM = OSOL
 comptime OCGO = OCGM + NV
 comptime OCGMO = OCGO + NV
-comptime OGF = OSOL  # PGS scratch (SOLVER 0 only): force, visitation order, 1/diag of AR per row; then z = L^-T J' f
-comptime OGP = OGF + NEFC
-comptime OGA = OGP + NEFC
-comptime OGZ = OGA + NEFC
-comptime SOLROWS = 3 * NV if SOLVER == 1 else (3 * NEFC + NV if SOLVER == 0 else 0)
+comptime OGF = OSOL  # PGS scratch (SOLVER 0 only), per row (contacts, then the equality block): force, live rows and visiting order (2 per row), 1/diag of AR; then z = L^-T J' f, the equality rows' w (laid out as OEQJ), the island union-find (a parent per body)
+comptime OGP = OGF + NEFC + NEQR
+comptime OGA = OGP + 2 * (NEFC + NEQR)
+comptime OGZ = OGA + NEFC + NEQR
+comptime OGWE = OGZ + NV
+comptime OGU = OGWE + NEQJ
+comptime SOLROWS = 3 * NV if SOLVER == 1 else (4 * (NEFC + NEQR) + NV + NEQJ + NB if SOLVER == 0 else 0)
 comptime OGAME = OSOL + SOLROWS  # GAME: four float32 rows per animal, energy health stamina dead; all zero = not started
 comptime OSLP = OGAME + (4 if GAME else 0)  # SLEEP: quiet checks in a row (MuJoCo tree_asleep + 11), SLEPT once asleep
 comptime OQAPP = OSLP + (1 if SLEEP else 0)  # NXF: qfrc_applied (MuJoCo mj_xfrcAccumulate), NV rows
@@ -2755,13 +2757,88 @@ def pcg32(mut state: UInt64) -> UInt32:
     return (xorshifted >> rot) | (xorshifted << ((UInt32(0) - rot) & 31))
 
 
+@always_inline
+def eqof(mi: TI, k: Int) -> Int:
+    """The equality-block entry holding block row k (entries' rows ascend)."""
+    for e in range(NEQ):
+        if k < Int(mi[CEQH + EQH * e + 6]) + Int(mi[CEQH + EQH * e + 3]):
+            return e
+    return NEQ - 1
+
+
+def prow(mi: TI, res: TO, f: Int, R: Int) -> Tuple[Int, Int, Int, Int]:
+    """PGS row R (contact rows below NEFC, then the equality block's): its J address, w address (L^-T J', laid out as J),
+    chain length and chain address."""
+    if R < NEFC:
+        var p = rowpair(mi, res, f, R)
+        var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
+        var jo = jbase(mi, res, f, p) + (RS * (R // RS - sbase(mi, res, f, p)) + R % RS) * nch
+        return (OJ + jo, OWC + jo, nch, CCHAIN + choff)
+    var k = R - NEFC
+    var eh = CEQH + EQH * eqof(mi, k)
+    var nch = Int(mi[eh + 4])
+    var jo = Int(mi[eh + 7]) + (k - Int(mi[eh + 6])) * nch
+    return (OEQJ + jo, OGWE + jo, nch, CEQC + Int(mi[eh + 5]))
+
+
+@always_inline
+def pget(res: TO, f: Int, R: Int, C: Int, E: Int) -> Float32:
+    """Row R's value in the contact array C or the equality-block array E (OD/OEQD, OJAR/OEQJAR, ...)."""
+    return get(res, f, C + R) if R < NEFC else get(res, f, E + R - NEFC)
+
+
+@always_inline
+def pwz(mi: TI, res: TO, f: Int, a: Int, b: Int) -> Float32:
+    """w_a' D^-1 w_b over row a's chain (rows a and b of one block share it)."""
+    var A = prow(mi, res, f, a); var B = prow(mi, res, f, b)
+    var s: Float32 = 0
+    for c in range(A[2]):
+        s += get(res, f, A[1] + c) * get(res, f, OLDI + Int(mi[A[3] + c])) * get(res, f, B[1] + c)
+    return s
+
+
+@always_inline
+def pres(mi: TI, res: TO, f: Int, R: Int) -> Float32:
+    """MuJoCo residual: b + AR f for row R, matrix-free: jar(qacc_smooth) + w' D^-1 z + R f."""
+    var A = prow(mi, res, f, R)
+    var s = pget(res, f, R, OJAR, OEQJAR)
+    for c in range(A[2]):
+        var i = Int(mi[A[3] + c])
+        s += get(res, f, A[1] + c) * get(res, f, OLDI + i) * get(res, f, OGZ + i)
+    return s + get(res, f, OGF + R) / pget(res, f, R, OD, OEQD)
+
+
+@always_inline
+def pmove(mi: TI, res: TO, f: Int, R: Int, delta: Float32):
+    """force[R] += delta, z += w_R delta."""
+    if delta == 0:
+        return
+    res[(OGF + R) * F + f] = get(res, f, OGF + R) + delta
+    var A = prow(mi, res, f, R)
+    for c in range(A[2]):
+        res[(OGZ + Int(mi[A[3] + c])) * F + f] += get(res, f, A[1] + c) * delta
+
+
+@always_inline
+def ufind(res: TO, f: Int, b: Int) -> Int:
+    var r = b
+    while Int(get(res, f, OGU + r)) != r:
+        r = Int(get(res, f, OGU + r))
+    return r
+
+
 def pgs(mi: TI, mf: TF, res: TO, f: Int):
-    """MuJoCo mj_solPGS (engine_solver.c:416), pyramidal rows (no equality, friction loss or elliptic cones): dual projected
-    Gauss-Seidel on AR = J M^-1 J' + R over the valid rows, each sweep in the order MuJoCo's fixed-seed pcg32 Fisher-Yates
-    shuffle gives, force = max(0, force - res / AR_ii), improvement from costChange, stop below opt.tolerance. Matrix-free as
-    noslip: w = L^-T J' per row, A(i, j) = w_i' D^-1 w_j, z = L^-T J' f kept current. Warmstart (engine_forward.c warmstart):
-    force = -D jar at qacc_warmstart, zero when its dual cost f.b + f.AR.f / 2 is positive. Then mj_dualFinish; the result
-    is left in Newton's representation (OST, OJAR = -f / D, OQFC = J' f, OCQACC) so noslip continues from it unchanged."""
+    """MuJoCo mj_solPGS (engine_solver.c:416) per island: dual projected Gauss-Seidel on AR = J M^-1 J' + R over contact rows
+    and the equality block's (equality unclamped, friction loss within +-frictionloss, limit and pyramidal rows >= 0, an
+    elliptic contact one block of 3: normal or ray update, then the friction pair by mju_QCQP2 on the raw friction), each sweep
+    in the order MuJoCo's fixed-seed pcg32 Fisher-Yates shuffle gives, improvement from costChange, stop below opt.tolerance.
+    Rows with D = 0 (an inactive equality, a frictionless contact's empty rows) do not exist for MuJoCo and are skipped.
+    Islands (mj_island): a union-find over kinematic trees joining every row's nonzero Jacobian entries; each island has its
+    own shuffle and stop test, rows in efc order (equality block, then contacts). Matrix-free as noslip: w = L^-T J' per row,
+    A(i, j) = w_i' D^-1 w_j, z = L^-T J' f kept current. Warmstart (engine_forward.c:833): mj_constraintUpdate's forces at
+    qacc_warmstart, zero when their dual cost f.b + f.AR.f / 2 is positive. Then mj_dualFinish; the result is left in
+    Newton's representation (OST, OJAR = -f / D, OQFC = J' f, OCQACC) so noslip continues from it unchanged."""
+    comptime NPR = NEFC + NEQR
     for v in range(NV):
         res[(OQSM + v) * F + f] = qsmooth(res, f, v)
         comptime if STAGE >= 7:
@@ -2772,68 +2849,116 @@ def pgs(mi: TI, mf: TF, res: TO, f: Int):
     res[ODIAG * F + f] = 0
     res[(ODIAG + 1) * F + f] = 0
     res[(ODIAG + 2) * F + f] = 0
-    _ = start(mi, mf, res, f, OQACCS)  # OJAR = J qacc_smooth - aref = efc_b on the valid rows
-    var na = RS * Int(get(res, f, OACT))
+    _ = start(mi, mf, res, f, OQACCS)  # OJAR, OEQJAR = J qacc_smooth - aref = efc_b
     for v in range(NV):
         res[(OGZ + v) * F + f] = 0
-    for ip in range(Int(get(res, f, OPA))):  # w = L^-T J' of every valid row (OWC), AR_ii, and the warmstart force with its z
+    for b in range(NB):
+        res[(OGU + b) * F + f] = Float32(b)
+    # the live rows (efc order: equality block, then contacts; an elliptic contact by its first row), w = L^-T J' of each
+    var nb = 0
+    for k in range(NEQR):
+        if get(res, f, OEQD + k) != 0:
+            res[(OGP + nb) * F + f] = Float32(NEFC + k)
+            nb += 1
+    for ip in range(Int(get(res, f, OPA))):  # contacts in pair order (MuJoCo's efc order; pooled slots are not in slot order)
         var p = Int(get(res, f, OPA + 1 + ip))
-        var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
-        for sl in range(nslot(mi, res, f, p)):
-            if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
+        for c in range(nslot(mi, res, f, p)):
+            var sl = sbase(mi, res, f, p) + c
+            if get(res, f, OVALID + sl) == 0:
                 continue
-            for k in range(RS):
-                var r = RS * (sbase(mi, res, f, p) + sl) + k
-                var jo = jbase(mi, res, f, p) + (RS * sl + k) * nch
-                ltsolve(mi, res, f, OW, OJ + jo, nch, choff)
-                var a: Float32 = 0
-                for c in range(nch):
-                    var i = Int(mi[CCHAIN + choff + c])
-                    var w = get(res, f, OW + i)
-                    res[(OWC + jo + c) * F + f] = w
-                    a += w * w * get(res, f, OLDI + i)
-                res[(OGA + r) * F + f] = 1 / (a + 1 / get(res, f, OD + r))
-                var jw: Float32 = 0  # J qacc_warmstart: zero at the fresh state (K = 0), the last step's qacc otherwise
-                comptime if K > 0:
-                    jw = jdot(mi, res, f, OJ + jo, nch, choff, OWARM)
-                var jar = jw - get(res, f, OAREF + r)
-                var fr: Float32 = -get(res, f, OD + r) * jar if jar < 0 else 0
-                res[(OGF + r) * F + f] = fr
-                for c in range(nch):
-                    res[(OGZ + Int(mi[CCHAIN + choff + c])) * F + f] += get(res, f, OWC + jo + c) * fr
-    var cost: Float32 = 0  # f.b + f.AR.f / 2: AR f = w' D^-1 z + R f
-    for ip in range(Int(get(res, f, OPA))):
-        var p = Int(get(res, f, OPA + 1 + ip))
-        var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
-        for sl in range(nslot(mi, res, f, p)):
-            if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
-                continue
-            for k in range(RS):
-                var r = RS * (sbase(mi, res, f, p) + sl) + k
-                var jo = jbase(mi, res, f, p) + (RS * sl + k) * nch
-                var fr = get(res, f, OGF + r)
-                if fr == 0:
-                    continue
-                var arf: Float32 = 0
-                for c in range(nch):
-                    var i = Int(mi[CCHAIN + choff + c])
-                    arf += get(res, f, OWC + jo + c) * get(res, f, OLDI + i) * get(res, f, OGZ + i)
-                cost += fr * get(res, f, OJAR + r) + 0.5 * fr * (arf + fr / get(res, f, OD + r))
+            for k in range(1 if ELL else RS):
+                if get(res, f, OD + RS * sl + k) != 0:
+                    res[(OGP + nb) * F + f] = Float32(RS * sl + k)
+                    nb += 1
+    for bi in range(nb):
+        var R0 = Int(get(res, f, OGP + bi))
+        var first = -1  # the block's first tree: every other tree it touches joins it
+        for kk in range(3 if ELL and R0 < NEFC else 1):
+            var R = R0 + kk
+            var A = prow(mi, res, f, R)
+            ltsolve(mi, res, f, OW, A[0], A[2], A[3], 0)
+            var a: Float32 = 0
+            for c in range(A[2]):
+                var i = Int(mi[A[3] + c])
+                var w = get(res, f, OW + i)
+                res[(A[1] + c) * F + f] = w
+                a += w * w * get(res, f, OLDI + i)
+                if get(res, f, A[0] + c) != 0:
+                    var t = ufind(res, f, Int(mi[ROOT + Int(mi[DBODY + i])]))
+                    if first < 0:
+                        first = t
+                    elif t != first:
+                        res[(OGU + t) * F + f] = Float32(first)
+            res[(OGA + R) * F + f] = 1 / (a + 1 / pget(res, f, R, OD, OEQD))
+    # warmstart: mj_constraintUpdate at qacc_warmstart (zero at K = 0, the last step's qacc otherwise)
+    for R in range(NPR):
+        res[(OGF + R) * F + f] = 0
+    for bi in range(nb):
+        var R = Int(get(res, f, OGP + bi))
+        var jw = SIMD[DType.float32, 4](0)
+        for kk in range(3 if ELL and R < NEFC else 1):
+            comptime if K > 0:
+                var A = prow(mi, res, f, R + kk)
+                for c in range(A[2]):
+                    jw[kk] += get(res, f, A[0] + c) * get(res, f, OWARM + Int(mi[A[3] + c]))
+            jw[kk] -= pget(res, f, R + kk, OAREF, OEQA)
+        var fr = SIMD[DType.float32, 4](0)
+        var D = pget(res, f, R, OD, OEQD)
+        if R >= NEFC and R - NEFC < NEQB:
+            fr[0] = -D * jw[0]
+        elif R >= NEFC and R - NEFC < NEQL:
+            var fl = floss(mf, R - NEFC)
+            fr[0] = -D * jw[0] if fquad(mf, res, f, R - NEFC, jw[0]) else (fl if jw[0] < 0 else -fl)
+        elif R < NEFC and ELL:  # the cone (update_cone)
+            var p = rowpair(mi, res, f, R)
+            var fc = cone_fric(mf, p)
+            var mu = fc[0]
+            var U = V3(jw[0] * mu, jw[1] * fc[1], jw[2] * fc[2], 0)
+            var T = sqrt(U[1] * U[1] + U[2] * U[2])
+            if U[0] >= mu * T or (T <= 0 and U[0] >= 0):
+                pass
+            elif mu * U[0] + T <= 0 or (T <= 0 and U[0] < 0):
+                for kk in range(3):
+                    fr[kk] = -get(res, f, OD + R + kk) * jw[kk]
+            else:
+                var Dm = D / (mu * mu * (1 + mu * mu))
+                fr[0] = -Dm * (U[0] - mu * T) * mu
+                fr[1] = -fr[0] / T * U[1] * fc[1]
+                fr[2] = -fr[0] / T * U[2] * fc[2]
+        else:
+            fr[0] = -D * jw[0] if jw[0] < 0 else Float32(0)
+        for kk in range(3 if ELL and R < NEFC else 1):
+            pmove(mi, res, f, R + kk, fr[kk])
+    var cost: Float32 = 0  # f.b + f.AR.f / 2, AR f = w' D^-1 z + R f
+    for bi in range(nb):
+        var R = Int(get(res, f, OGP + bi))
+        for kk in range(3 if ELL and R < NEFC else 1):
+            var fr = get(res, f, OGF + R + kk)
+            if fr != 0:
+                var b = pget(res, f, R + kk, OJAR, OEQJAR)
+                cost += fr * b + 0.5 * fr * (pres(mi, res, f, R + kk) - b)
     if cost > 0:
-        for r in range(NEFC):
-            res[(OGF + r) * F + f] = 0
+        for R in range(NPR):
+            res[(OGF + R) * F + f] = 0
         for v in range(NV):
             res[(OGZ + v) * F + f] = 0
     var scale = 1 / (mf[COPT + 4] * Float32(NV))
     var tol = mf[COPT + 1]
-    for troot in range(1, NB):  # one island per kinematic tree (MuJoCo mj_solPGS_island: own rows, own fixed-seed shuffle, own stop); a pair never joins two trees
-        if mi[PARENT + troot] != 0:
+    var order = nb  # the island's visiting list, after the live rows in OGP
+    for troot in range(1, NB):
+        if mi[PARENT + troot] != 0 or ufind(res, f, troot) != troot:
             continue
         var ni = 0
-        for c in range(na):
-            var rp = rowpair(mi, res, f, RS * Int(get(res, f, OACT + 1 + c // RS)) + c % RS)
-            if Int(mi[ROOT + Int(mi[CPH + 11 * rp + 2])]) == troot:
-                res[(OGP + ni) * F + f] = Float32(c)
+        for bi in range(nb):
+            var R = Int(get(res, f, OGP + bi))
+            var A = prow(mi, res, f, R)
+            var t = -1
+            for c in range(A[2]):
+                if get(res, f, A[0] + c) != 0:
+                    t = ufind(res, f, Int(mi[ROOT + Int(mi[DBODY + Int(mi[A[3] + c])])]))
+                    break
+            if t == troot:
+                res[(OGP + order + ni) * F + f] = Float32(R)
                 ni += 1
         if ni == 0:
             continue
@@ -2843,55 +2968,98 @@ def pgs(mi: TI, mf: TF, res: TO, f: Int):
             res[ODIAG * F + f] += 1
             for i in range(ni - 1, 0, -1):  # Fisher-Yates over the persistent order
                 var j = Int(pcg32(rng) % UInt32(i + 1))
-                var t = get(res, f, OGP + i)
-                res[(OGP + i) * F + f] = get(res, f, OGP + j)
-                res[(OGP + j) * F + f] = t
+                var t = get(res, f, OGP + order + i)
+                res[(OGP + order + i) * F + f] = get(res, f, OGP + order + j)
+                res[(OGP + order + j) * F + f] = t
             var improvement: Float32 = 0
             for bi in range(ni):
-                var c = Int(get(res, f, OGP + bi))
-                var r = RS * Int(get(res, f, OACT + 1 + c // RS)) + c % RS
-                var p = rowpair(mi, res, f, r)
-                var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
-                var jo = jbase(mi, res, f, p) + (RS * (r // RS - sbase(mi, res, f, p)) + r % RS) * nch
-                var rs = get(res, f, OJAR + r)
-                for q in range(nch):
-                    var i = Int(mi[CCHAIN + choff + q])
-                    rs += get(res, f, OWC + jo + q) * get(res, f, OLDI + i) * get(res, f, OGZ + i)
-                var old = get(res, f, OGF + r)
-                rs += old / get(res, f, OD + r)
-                var new = max(old - rs * get(res, f, OGA + r), Float32(0))
+                var R = Int(get(res, f, OGP + order + bi))
+                if ELL and R < NEFC:
+                    improvement -= pgs_cone(mi, mf, res, f, R)
+                    continue
+                var rs = pres(mi, res, f, R)
+                var old = get(res, f, OGF + R)
+                var new = old - rs * get(res, f, OGA + R)
+                if R >= NEFC and R - NEFC < NEQB:
+                    pass
+                elif R >= NEFC and R - NEFC < NEQL:
+                    var fl = floss(mf, R - NEFC)
+                    new = min(max(new, -fl), fl)
+                else:
+                    new = max(new, Float32(0))
                 var delta = new - old
-                var change = 0.5 * delta * delta / get(res, f, OGA + r) + delta * rs
+                var change = 0.5 * delta * delta / get(res, f, OGA + R) + delta * rs
                 if change > 1e-10:
                     continue
                 improvement -= change
-                if delta != 0:
-                    res[(OGF + r) * F + f] = new
-                    for q in range(nch):
-                        res[(OGZ + Int(mi[CCHAIN + choff + q])) * F + f] += get(res, f, OWC + jo + q) * delta
+                pmove(mi, res, f, R, delta)
             if improvement * scale < tol:
                 break
     for v in range(NV):  # mj_dualFinish: qfrc_constraint = J' f, qacc = qacc_smooth + M^-1 qfrc_constraint
         res[(OQFC + v) * F + f] = 0
-    for ip in range(Int(get(res, f, OPA))):
-        var p = Int(get(res, f, OPA + 1 + ip))
-        var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
-        for sl in range(nslot(mi, res, f, p)):
-            if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
-                continue
-            for k in range(RS):
-                var r = RS * (sbase(mi, res, f, p) + sl) + k
-                var fr = get(res, f, OGF + r)
-                res[(OST + r) * F + f] = 1 if fr > 0 else 0
-                res[(OJAR + r) * F + f] = -fr / get(res, f, OD + r) if fr > 0 else Float32(1)
-                var jadr = OJ + jbase(mi, res, f, p) + (RS * sl + k) * nch
-                for c in range(nch):
-                    res[(OQFC + Int(mi[CCHAIN + choff + c])) * F + f] += get(res, f, jadr + c) * fr
+    for R in range(NPR):
+        var fr = get(res, f, OGF + R)
+        var D = pget(res, f, R, OD, OEQD)
+        var bil = R >= NEFC and R - NEFC < NEQL  # equality and friction rows: any sign
+        if R < NEFC:
+            res[(OST + R) * F + f] = 1 if fr > 0 else 0
+            res[(OJAR + R) * F + f] = -fr / D if fr > 0 else Float32(1)
+            comptime if ELL:
+                res[(OFRC + R) * F + f] = fr
+        elif D != 0:
+            res[(OEQJAR + R - NEFC) * F + f] = -fr / D if fr > 0 or bil else Float32(1)
+        if fr == 0:
+            continue
+        var A = prow(mi, res, f, R)
+        for c in range(A[2]):
+            res[(OQFC + Int(mi[A[3] + c])) * F + f] += get(res, f, A[0] + c) * fr
     for v in range(NV):
         res[(OW + v) * F + f] = get(res, f, OQFC + v)
     solveLD(mi, res, f, OW, OLD, OLDI)
     for v in range(NV):
         res[(OCQACC + v) * F + f] = get(res, f, OQACCS + v) + get(res, f, OW + v)
+
+
+def pgs_cone(mi: TI, mf: TF, res: TO, f: Int, R: Int) -> Float32:
+    """One elliptic contact (rows R..R+2) of mj_solPGS: residual, the 3 x 3 block of AR, a normal update while the normal
+    force is below mjMINVAL else a ray update along the current force, then the friction pair by mju_QCQP2 with the normal
+    fixed (bc = res - Ac f_old + A(.,0) df0), costChange on the block (restored when positive). Returns the change."""
+    var p = rowpair(mi, res, f, R)
+    var fc = cone_fric(mf, p)
+    var rs = V3(pres(mi, res, f, R), pres(mi, res, f, R + 1), pres(mi, res, f, R + 2), 0)
+    var o = V3(get(res, f, OGF + R), get(res, f, OGF + R + 1), get(res, f, OGF + R + 2), 0)
+    var A00 = pwz(mi, res, f, R, R) + 1 / get(res, f, OD + R)
+    var A01 = pwz(mi, res, f, R, R + 1); var A02 = pwz(mi, res, f, R, R + 2)
+    var A11 = pwz(mi, res, f, R + 1, R + 1) + 1 / get(res, f, OD + R + 1)
+    var A12 = pwz(mi, res, f, R + 1, R + 2)
+    var A22 = pwz(mi, res, f, R + 2, R + 2) + 1 / get(res, f, OD + R + 2)
+    var n = o
+    if o[0] < MINVAL:  # normal update
+        n[0] = max(o[0] - rs[0] / A00, Float32(0))
+        n[1] = 0; n[2] = 0
+    else:  # ray update
+        var v1 = V3(A00 * o[0] + A01 * o[1] + A02 * o[2], A01 * o[0] + A11 * o[1] + A12 * o[2], A02 * o[0] + A12 * o[1] + A22 * o[2], 0)
+        var denom = (o * v1).reduce_add()
+        if denom >= MINVAL:
+            var x = -(o * rs).reduce_add() / denom
+            if o[0] + x * o[0] < 0:
+                x = -o[0] / o[0]
+            n = o + x * o
+    var b1 = rs[1] - (A11 * o[1] + A12 * o[2]) + A01 * (n[0] - o[0])
+    var b2 = rs[2] - (A12 * o[1] + A22 * o[2]) + A02 * (n[0] - o[0])
+    if n[0] < MINVAL:
+        n[1] = 0; n[2] = 0
+    else:
+        var q = qcqp2(A11, A12, A22, b1, b2, fc[1], fc[2], n[0])
+        n[1] = q[0]; n[2] = q[1]
+    var d = n - o
+    var Ad = V3(A00 * d[0] + A01 * d[1] + A02 * d[2], A01 * d[0] + A11 * d[1] + A12 * d[2], A02 * d[0] + A12 * d[1] + A22 * d[2], 0)
+    var change = 0.5 * (d * Ad).reduce_add() + (d * rs).reduce_add()
+    if change > 1e-10:
+        return 0
+    for kk in range(3):
+        pmove(mi, res, f, R + kk, d[kk])
+    return change
 
 
 def newton(mi: TI, mf: TF, res: TO, f: Int):
@@ -3007,13 +3175,14 @@ def newton(mi: TI, mf: TF, res: TO, f: Int):
 
 
 @always_inline
-def ltsolve(mi: TI, res: TO, f: Int, W: Int, jadr: Int, nch: Int, choff: Int):
+def ltsolve(mi: TI, res: TO, f: Int, W: Int, jadr: Int, nch: Int, choff: Int, ch: Int = CCHAIN):
     """One constraint row's w = L^-T J' (mj_solveLD's first half on M's factor): nonzero on the row's chain only,
-    which holds every M ancestor of its dofs, so rows W.. outside the chain are neither read nor written."""
+    which holds every M ancestor of its dofs, so rows W.. outside the chain are neither read nor written. ch: the chain
+    table (contact chains CCHAIN, equality chains CEQC; 0 with an absolute choff)."""
     for c in range(nch):
-        res[(W + Int(mi[CCHAIN + choff + c])) * F + f] = get(res, f, jadr + c)
+        res[(W + Int(mi[ch + choff + c])) * F + f] = get(res, f, jadr + c)
     for c in range(nch - 1, -1, -1):
-        var i = Int(mi[CCHAIN + choff + c])
+        var i = Int(mi[ch + choff + c])
         var start = Int(mi[MADR + i])
         var x_i = get(res, f, W + i)
         for adr in range(start, start + Int(mi[MNNZ + i]) - 1):

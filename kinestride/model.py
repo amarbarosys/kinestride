@@ -304,6 +304,8 @@ def override(m):
             m.opt.solver = int(val)
         elif key == 'noslip':  # noslip_iterations: 0 isolates the solver (noslip runs once over all contacts in the engine, per island in MuJoCo)
             m.opt.noslip_iterations = int(val)
+        elif key == 'noslip_tol':  # opt.noslip_tolerance (0: every noslip sweep runs, no stop test)
+            m.opt.noslip_tolerance = float(val)
         elif key == 'kv':
             joint = (m.actuator_trntype == mujoco.mjtTrn.mjTRN_JOINT) & (m.actuator_biastype == mujoco.mjtBias.mjBIAS_AFFINE)
             m.actuator_biasprm[joint, 2] = -float(val)
@@ -621,8 +623,8 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
            then, with DIMX, every pair's friction 2-4 (torsional, rolling 1 and 2)
     """
     elliptic = m.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
-    if m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON and (elliptic or convex or hfexact):  # CG and PGS: pyramidal rows of plane-mesh and sphere pairs (check.sh solver)
-        raise SystemExit('FAIL export: CG and PGS are gated with the pyramidal cone and plane-mesh / sphere pairs only (check.sh solver)')
+    if (m.opt.solver == mujoco.mjtSolver.mjSOL_CG and (elliptic or convex or hfexact)) or (m.opt.solver == mujoco.mjtSolver.mjSOL_PGS and hfexact):  # CG: pyramidal rows of plane-mesh and sphere pairs (check.sh solver); PGS also elliptic and convex (check.sh pgs_full)
+        raise SystemExit('FAIL export: CG is gated with the pyramidal cone and plane-mesh / sphere pairs only (check.sh solver), PGS also with the elliptic cone and convex pairs, not exact heightfields (check.sh pgs_full)')
     if (m.geom_contype & m.geom_conaffinity).any():
         raise SystemExit('FAIL export: contacts need explicit pairs only')
     sel, drop = pairs(m, regex, convex)
@@ -742,8 +744,8 @@ def eq_rows(m, limits=True):
             c |= set(range(m.body_dofadr[b], m.body_dofadr[b] + m.body_dofnum[b]))
             b = m.body_parentid[b]
         return c
-    if m.neq and (m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator):
-        raise SystemExit('FAIL export: equality constraints are gated with the Newton solver and the pyramidal cone only '
+    if m.neq and (m.opt.solver not in (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_PGS) or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator):
+        raise SystemExit('FAIL export: equality constraints are gated with the Newton or PGS solver and the pyramidal cone only '
                          'and the Euler integrator only (check.sh equality, equality_contact); CG, PGS, elliptic cones and implicit integrators with equalities are untested')
     W = mujoco.mjtWrap
 
@@ -793,8 +795,8 @@ def eq_rows(m, limits=True):
             raise SystemExit(f'FAIL export: equality {i} constrains nothing movable')
         out.append(e)
     fr = np.flatnonzero(m.dof_frictionloss) if limits else []
-    if len(fr) and (m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator or m.opt.noslip_iterations):
-        raise SystemExit('FAIL export: dof friction loss rows are gated with the Newton solver, the pyramidal cone, the Euler integrator and '
+    if len(fr) and (m.opt.solver not in (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_PGS) or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator or m.opt.noslip_iterations):
+        raise SystemExit('FAIL export: dof friction loss rows are gated with the Newton or PGS solver, the pyramidal cone, the Euler integrator and '
                          'noslip_iterations 0 only (check.sh frictionloss); noslip over friction-loss rows is not ported')
     for i in fr:  # mj_instantiateFriction dof rows (engine_core_constraint.c:1207): J = 1 on the dof, pos 0, K = 0, |force| <= frictionloss (Huber cost)
         if m.dof_solref[i][0] <= 0 or m.dof_solref[i][1] <= 0:
@@ -803,8 +805,8 @@ def eq_rows(m, limits=True):
                         s=[1, 0, 0, 0, 1, 0, 0, 0], ts=1.0, invw=[float(m.dof_invweight0[i]), 0.0], in0=set(), in1=set(),
                         dof=[int(i), 0], qadr=[-1, -1], data=[float(m.dof_frictionloss[i]), 0.0, 0.0, 0.0, 0.0], qref=[0.0, 0.0]))
     tf = np.flatnonzero(m.tendon_frictionloss > 0) if limits else []
-    if len(tf) and (m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator or m.opt.noslip_iterations):
-        raise SystemExit('FAIL export: tendon friction loss rows are gated with the Newton solver, the pyramidal cone, the Euler integrator and '
+    if len(tf) and (m.opt.solver not in (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_PGS) or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator or m.opt.noslip_iterations):
+        raise SystemExit('FAIL export: tendon friction loss rows are gated with the Newton or PGS solver, the pyramidal cone, the Euler integrator and '
                          'noslip_iterations 0 only (check.sh tendon_friction); noslip over friction-loss rows is not ported')
     for t in tf:  # mj_instantiateFriction tendon rows (engine_core_constraint.c:1240): J = ten_J, pos 0, K = 0, |force| <= frictionloss
         if m.tendon_solref_fri[t][0] <= 0 or m.tendon_solref_fri[t][1] <= 0:
@@ -816,8 +818,8 @@ def eq_rows(m, limits=True):
                         s=[1, 0, 0, 0, 1, 0, 0, 0], ts=1.0, invw=[float(m.tendon_invweight0[t]), 0.0], in0=set(), in1=set(),
                         dof=[int(t), 0], qadr=[-1, -1], data=[float(m.tendon_frictionloss[t]), 0.0, 0.0, 0.0, 0.0], qref=[0.0, 0.0]))
     lim = np.flatnonzero(m.jnt_limited) if limits else []
-    if len(lim) and (m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator):
-        print(f'export: {len(lim)} joint limits NOT exported: their rows are gated with the Newton solver, the pyramidal cone and Euler only (check.sh joint_limit)')
+    if len(lim) and (m.opt.solver not in (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_PGS) or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator):
+        print(f'export: {len(lim)} joint limits NOT exported: their rows are gated with the Newton or PGS solver, the pyramidal cone and Euler only (check.sh joint_limit)')
         lim = []
     for j in lim:  # mj_instantiateLimit joint rows (engine_core_constraint.c), hinge and slide: dist = side (range - qpos), J = -side on the dof
         if m.jnt_type[j] not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
@@ -828,8 +830,8 @@ def eq_rows(m, limits=True):
                             s=[1, 0, 0, 0, 1, 0, 0, 0], ts=1.0, invw=[float(m.dof_invweight0[dof]), 0.0], in0=set(), in1=set(),
                             dof=[dof, side], qadr=[int(m.jnt_qposadr[j]), -1], data=[float(m.jnt_range[j][(side + 1) // 2]), float(m.jnt_margin[j]), 0.0, 0.0, 0.0], qref=[0.0, 0.0]))
     for t in np.flatnonzero(m.tendon_limited):  # mj_instantiateLimit tendon rows (engine_core_constraint.c:1277), one per side, unilateral
-        if m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator:
-            raise SystemExit('FAIL export: tendon limits are gated with the Newton solver, the pyramidal cone and the Euler integrator only (check.sh tendon_limit)')
+        if m.opt.solver not in (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_PGS) or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator:
+            raise SystemExit('FAIL export: tendon limits are gated with the Newton or PGS solver, the pyramidal cone and the Euler integrator only (check.sh tendon_limit)')
         union = ten_union(t)
         if not union:
             raise SystemExit(f'FAIL export: limited tendon {t} moves nothing')
@@ -1546,9 +1548,9 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
     cross = cross_trees(m, regex, convex)
     rows = [c for c in cross if not c.startswith('pair')]  # equalities and tendons across trees: pyramidal only; pairs also elliptic (check.sh freefree)
     if cross and (m.opt.integrator != mujoco.mjtIntegrator.mjINT_EULER
-                  or m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON
+                  or m.opt.solver not in (mujoco.mjtSolver.mjSOL_NEWTON, mujoco.mjtSolver.mjSOL_PGS)
                   or (rows and m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL)):
-        raise SystemExit(f"FAIL export: coupling across two trees ({', '.join(cross[:3])}) is gated with the Newton solver and the Euler integrator only, equalities and tendons with the pyramidal cone (check.sh cross, freefree)")
+        raise SystemExit(f"FAIL export: coupling across two trees ({', '.join(cross[:3])}) is gated with the Newton or PGS solver and the Euler integrator only, equalities and tendons with the pyramidal cone (check.sh cross, freefree)")
     out.mkdir(parents=True, exist_ok=True)
     ints = [getattr(m, f).ravel() for f in INTS]
     floats = [np.ravel(getattr(m.opt, f[4:]) if f.startswith('opt.') else getattr(m, f)) for f in FLOATS]
@@ -1560,6 +1562,9 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
     if limits is None:  # joint limit rows ride the constraint block: exported when the model already has one (contacts, equalities,
         limits = bool(regex) or bool(m.neq) or bool(m.tendon_limited.any()) or bool(m.dof_frictionloss.any()) or bool(m.tendon_frictionloss.any())  # tendon limits, friction loss); contact-free stages below S6 keep none
     eq, hr, hl = eq_rows(m, limits), [], []
+    if m.opt.solver == mujoco.mjtSolver.mjSOL_PGS and m.opt.noslip_iterations and (m.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC or convex):
+        raise SystemExit('FAIL export: noslip after PGS is gated with the pyramidal cone on plane-mesh and sphere pairs only (check.sh solver, pgs_full; '
+                         'with convex pairs one arena state of 64 moved 0.28 off MuJoCo, open)')
     if regex or eq:  # equality rows ride the solver block: no pairs (regex '^$') still needs it
         ci, cf, cs = feet(m, regex or '^$', [e['union'] for e in eq], hr, convex, hfexact, hl)
         ints, floats, sizes = ints + [ci], floats + [cf], sizes | cs
@@ -2010,6 +2015,8 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
         def run(qq, vv, pp, qm):  # mj_oracle.reference with the mocap pose set per state
             d, o = mujoco.MjData(s), {f: [] for f in ref}
             for n in range(count):
+                if s.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON:  # no warmstart carried from the last state (reference_fresh)
+                    d = mujoco.MjData(s)
                 d.qpos[:], d.qvel[:] = qq[n], vv[n]
                 if s.nmocap:
                     d.mocap_pos[:], d.mocap_quat[:] = pp[n], qm[n]

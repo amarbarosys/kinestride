@@ -1,0 +1,18 @@
+<mujoco model="islands">
+  <!-- check.sh pgs_full: PGS islands across trees. Free spheres A-B-C in a chain (pairs A-B and B-C: one island of three trees,
+       the B-C rows start on B's dofs) and D-E apart (a second island); each pair overlaps 0.01 at qpos0. No floor. -->
+  <option timestep="0.002" noslip_iterations="0" tolerance="0"/>
+  <default><geom contype="0" conaffinity="0" density="500"/></default>
+  <worldbody>
+    <body name="A" pos="2 0 0.5"><freejoint/><geom name="a" type="sphere" size="0.08"/></body>
+    <body name="B" pos="2.145 0 0.5"><freejoint/><geom name="b" type="sphere" size="0.075"/></body>
+    <body name="C" pos="2.29 0 0.5"><freejoint/><geom name="c" type="sphere" size="0.08"/></body>
+    <body name="D" pos="2 1 0.5"><freejoint/><geom name="d" type="sphere" size="0.06"/></body>
+    <body name="E" pos="2.11 1 0.5"><freejoint/><geom name="e" type="sphere" size="0.06"/></body>
+  </worldbody>
+  <contact>
+    <pair geom1="a" geom2="b" margin="0.01"/>
+    <pair geom1="b" geom2="c" margin="0.01"/>
+    <pair geom1="d" geom2="e" margin="0.01"/>
+  </contact>
+</mujoco>
