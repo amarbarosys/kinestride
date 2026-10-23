@@ -179,8 +179,12 @@ if [ "$stage" = eqact_runtime ]; then  # runtime eq_active (mj_instantiateEquali
   EF=$($M -c "from kinestride.model import with_inactive; print(with_inactive('kinestride/models/eq_test.xml', '$X/eqr/fixture.xml'))")
   ES=$($M -c "from kinestride.model import with_inactive, with_tendon_equalities; print(with_inactive(with_tendon_equalities('kinestride/models/spider_test.xml', '$X/eqr/spider0.xml', tolerance=0, fixed=True), '$X/eqr/spider.xml'))")
   EY=$($M -c "from kinestride.model import with_inactive, with_spatial_tendons, with_tendon_equalities; print(with_inactive(with_tendon_equalities(with_spatial_tendons('${BODY:-.work/assets/fly/body.xml}', '$X/eqr/fly0.xml'), '$X/eqr/fly1.xml', tolerance=0), '$X/eqr/fly.xml'))")
+  # eq_test with joint limits and dof friction loss too (with_frictionloss, with_joint_limits): the block carries 8 equalities, then 16
+  # friction and 14 limit rows; -DEQACT reads one host row per equality (NEQE), none for those rows (they were 38 rows, ctrl.bin 8)
+  EM=$($M -c "from kinestride.model import with_inactive, with_joint_limits, with_frictionloss; print(with_inactive(with_joint_limits(with_frictionloss('kinestride/models/eq_test.xml', '$X/eqr/fl.xml', tolerance=0), '$X/eqr/fljl.xml', solref=0.1, tolerance=0), '$X/eqr/mixed.xml'))")
   for a in "" 1; do  # EQACT unset: eq_active0 held; EQACT=1: random on/off per equality per state
     EQACT=$a $M -m kinestride.model check $EF $X/eqr/fixture$a equality 64 || { echo "FAIL eqact_runtime fixture EQACT=$a"; fail=$((fail+1)); }
+    EQACT=$a $M -m kinestride.model check $EM $X/eqr/mixed$a equality 64 || { echo "FAIL eqact_runtime mixed EQACT=$a"; fail=$((fail+1)); }
     EQACT=$a $M -m kinestride.model check $ES $X/eqr/spider$a tendon_eq 64 || { echo "FAIL eqact_runtime spider EQACT=$a"; fail=$((fail+1)); }
     EQACT=$a REL=2e-3 $M -m kinestride.model check $EY $X/eqr/fly$a tendon_eq 64 || { echo "FAIL eqact_runtime fly EQACT=$a"; fail=$((fail+1)); }
   done
@@ -190,6 +194,9 @@ if [ "$stage" = eqact_runtime ]; then  # runtime eq_active (mj_instantiateEquali
     $M -m kinestride.model check $EF $X/mutant equality 64 || fail=$((fail+1))
   ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/            on = ctrl\[(NU + 7 \* NMOCAP + 7 \* NXF + e) \* F + f\]/            on *= ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]/' -- \
     $M -m kinestride.eqact_rollout $EF $X/mutant 64 12 || fail=$((fail+1))
+  # the gate must fail with one host row per block entry (friction and limit rows included), the clash before NEQE
+  EQACT=1 ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/(NEQE if EQACT else 0)/(NEQ if EQACT else 0)/' -- \
+    $M -m kinestride.model check $EM $X/mutant equality 64 || fail=$((fail+1))
   CPU=0 EQACT=1 $M -m kinestride.model check $EF $X/eqr/gpu equality 64 || { echo "FAIL eqact_runtime card"; fail=$((fail+1)); }
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all eqact_runtime checks"; exit 0

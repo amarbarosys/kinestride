@@ -124,7 +124,8 @@ comptime CEQM = CEQC + NEQCH
 comptime NMOCAP = get_defined_int["NMOCAP", 0]()
 comptime NXF = get_defined_int["NXF", 0]()  # MuJoCo xfrc_applied, sparse: slots per animal in ctrl.bin after the mocap rows, each body id, force 3, torque 3
 comptime EQACT = get_defined_int["EQACT", 0]()  # 1: per-animal equality on/off, NEQ ctrl.bin rows after the push slots (MuJoCo eq_active)
-comptime NUC = NU + 7 * NMOCAP + 7 * NXF + (NEQ if EQACT else 0)
+comptime NEQE = get_defined_int["NEQE", NEQ]()  # MuJoCo's equalities: the block's first NEQE entries; friction and limit rows follow and have no eq_active
+comptime NUC = NU + 7 * NMOCAP + 7 * NXF + (NEQE if EQACT else 0)
 comptime CMOC = CEQM + NEQCH
 # gravcomp (model.py gravcomp_block, last): ints jnt_actgravcomp per joint, floats body_gravcomp per body
 comptime GRAVCOMP = get_defined_int["GRAVCOMP", 0]() == 1
@@ -2095,7 +2096,8 @@ def equality(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             B = -ref1 / max(Float32(1e-15), s1)
         var on = Float32(Int(mi[eh + 12]))  # MuJoCo eq_active0: d->eq_active's reset value, the state without -DEQACT
         comptime if EQACT:  # an inactive equality's rows get D = 0: no force, no Hessian term, no cost (MuJoCo drops them); the host's row wins
-            on = ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]
+            if e < NEQE:  # one host row per MuJoCo equality (m.neq), none for friction or limit rows
+                on = ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]
         for k in range(size):
             var row = rbase + k
             var dA = mf[ef + 23] if typ == 1 and k >= 3 else mf[ef + 22]

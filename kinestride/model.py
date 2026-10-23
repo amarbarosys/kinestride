@@ -866,6 +866,8 @@ def eq_block(m, eq, hrow):
     sizes = {'NEQ': len(eq), 'NEQR': nrow, 'NEQB': nb, 'NEQCH': len(chains), 'NEQJ': nje}
     if nfr:  # friction-loss rows NEQB..NEQL, the first of them equality NEQFE; absent: no such rows, binaries unchanged
         sizes |= {'NEQL': nb + nfr, 'NEQFE': sum(1 for e in eq if rank(e) == 0)}
+    if sum(1 for e in eq if rank(e) == 0) < len(eq):  # -DEQACT reads one ctrl.bin row per MuJoCo equality (the first NEQE entries), not per entry
+        sizes['NEQE'] = sum(1 for e in eq if rank(e) == 0)
     return np.array(head + chains + masks), np.array(fl), sizes
 
 
