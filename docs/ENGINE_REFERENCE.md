@@ -74,7 +74,7 @@ Fluid forces (opt density, viscosity, wind: ellipsoid model on geoms with fluids
 `mj_fluid`) are ported in STAGE 4 for the Flybody flight model, comptime-folded out (`NFLROW` unset) for walking bodies. The elliptic friction cone (`opt.cone elliptic`, comptime `ELLIPTIC`, export sets it) is ported for the exported plane-mesh and
 sphere pairs: three contact-frame rows per contact (R1 = R0 / impratio, R2 = R1 f0^2 / f1^2), the cone's top / bottom / middle
 zones, the cone Hessian block (rebuilt each Newton iteration), the line-search cone terms and noslip as a QCQP over the friction
-ellipse. Gate `check.sh cone` on the walking fly with `model.elliptic` (cone elliptic, noslip 0 and 5, MuJoCo to tolerance 0). Export refuses the elliptic cone with RK4 or implicitfast (untested).
+ellipse. Gate `check.sh cone` on the walking fly with `model.elliptic` (cone elliptic, noslip 0 and 5, MuJoCo to tolerance 0). The elliptic cone also runs under RK4 and implicitfast (`check.sh elliptic_int`: the fly, standing states; RK4 at dt 1e-7 within the floors, implicitfast at REL 1e-4 for the card's 6.7e-5; 2 mutants).
 
 Fixed tendons (joint wraps with coefs; length, velocity, spring with dead zone, damper, actuator trntype 3) are ported: export block
 `model.tendons` (NTEN/NWRAP; wrap arrays last so spatial wraps append), kernels `tendon()`/`tendon_passive()`/`actuation()`. Gate
