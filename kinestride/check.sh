@@ -607,6 +607,22 @@ if [ "$stage" = condim46 ]; then  # torsional and rolling friction (condim 4 and
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all condim46 checks"; exit 0
 fi
+if [ "$stage" = freefree ]; then  # contact pairs across two free bodies (two floating origins, docs/plans/FREE_FREE.md): models/free_pair.xml,
+  # bodies 2 m from the world origin, a sphere-sphere pair and a mesh-mesh pair (CONVEX=1), nearby states, pyramidal and elliptic, 1e-5;
+  # CROSS_MIN: at least 16 of 64 states must carry a cross-tree contact (a pass without one is vacuous)
+  S=kinestride/smooth.mojo; FP=kinestride/models/free_pair.xml; mkdir -p $X/ff
+  for c in 0 1; do
+    ENGINE_OPT=cone=$c CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $FP $X/ff/c$c contact 64 || { echo "FAIL freefree cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail (elliptic) with: geom1's origin shift dropped in the sphere path and in the convex path, geom1's Jacobian side on geom2's com
+  for mut in 's/^        pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/        pos1 = pos1/' \
+             's/^                pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/                pos1 = pos1/' \
+             's/var off1 = cpos - com1/var off1 = cpos - com/'; do
+    ENGINE_OPT=cone=1 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $FP $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all freefree checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's

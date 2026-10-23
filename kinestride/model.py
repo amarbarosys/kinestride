@@ -1484,10 +1484,11 @@ def export(mjcf, out, regex=None, act=False, convex=False, hfexact=False, limits
     if has_muscle and not act:
         raise SystemExit('FAIL export: muscle annotations require the stage-7 actuator block')
     cross = cross_trees(m, regex, convex)
+    rows = [c for c in cross if not c.startswith('pair')]  # equalities and tendons across trees: pyramidal only; pairs also elliptic (check.sh freefree)
     if cross and (m.opt.integrator != mujoco.mjtIntegrator.mjINT_EULER
                   or m.opt.solver != mujoco.mjtSolver.mjSOL_NEWTON
-                  or m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL):
-        raise SystemExit(f"FAIL export: coupling across two trees ({', '.join(cross[:3])}) is gated with the Newton solver, the pyramidal cone and the Euler integrator only (check.sh cross)")
+                  or (rows and m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL)):
+        raise SystemExit(f"FAIL export: coupling across two trees ({', '.join(cross[:3])}) is gated with the Newton solver and the Euler integrator only, equalities and tendons with the pyramidal cone (check.sh cross, freefree)")
     out.mkdir(parents=True, exist_ok=True)
     ints = [getattr(m, f).ravel() for f in INTS]
     floats = [np.ravel(getattr(m.opt, f[4:]) if f.startswith('opt.') else getattr(m, f)) for f in FLOATS]
