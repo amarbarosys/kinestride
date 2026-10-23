@@ -5,7 +5,7 @@ flight-contacts	mj_collideGeoms	engine_collision_driver.c	flight_contacts	done c
 sleep	mj_sleep	engine_sleep.c	sleep	done 9990fd0	sleep filter per animal (one tree = one island); throughput only, zero gain while every animal walks
 solref-direct	mj_makeImpedance	engine_core_constraint.c	solref_direct	done a5912f3	WF: direct solref (negative) on equality and limit rows; contacts already have it
 actfrc-gravcomp	mj_fwdActuation	engine_forward.c	actfrc	done 5488855	WF: jnt_actfrcrange clamp with gravcomp (export refuses today)
-tendon-eq	mj_instantiateEquality	engine_core_constraint.c	tendon_eq	open	WF: mjEQ_TENDON rows (cubic polycoef), Newton + pyramidal + Euler first
+tendon-eq	mj_instantiateEquality	engine_core_constraint.c	tendon_eq	done b4d4d5c	WF: mjEQ_TENDON rows (cubic polycoef), Newton + pyramidal + Euler first
 eq-active-runtime	mj_instantiateEquality	engine_core_constraint.c	eqact_runtime	open	WF: d->eq_active written by the host between steps (U4 has per-animal initial only)
 dof-friction	mj_instantiateFriction	engine_core_constraint.c	frictionloss	open	LANE: dof friction loss rows (Newton first)
 tendon-friction	mj_instantiateFriction	engine_core_constraint.c	tendon_friction	open	LANE: tendon friction loss rows

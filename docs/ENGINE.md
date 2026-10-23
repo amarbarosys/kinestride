@@ -31,7 +31,7 @@ check.sh STAGE:      fly + spider test body + a planted mutant (~/iTools/bin/mut
 ```
 
 A new species is a new MJCF file and an export, not new engine code. Refused at export (not ported):
-simple dofs and tendon equalities; tendon limits are ported (check.sh tendon_limit); the sleep filter is ported for one tree per animal (check.sh sleep); the flight model's own body-body contacts are ported (check.sh flight_contacts: automatic pairs, primitive narrowphase, condim 1). Equality constraints (connect, weld, joint), mocap
+simple dofs; tendon limits are ported (check.sh tendon_limit); tendon equalities are ported (check.sh tendon_eq); the sleep filter is ported for one tree per animal (check.sh sleep); the flight model's own body-body contacts are ported (check.sh flight_contacts: automatic pairs, primitive narrowphase, condim 1). Equality constraints (connect, weld, joint), mocap
 bodies, gravcomp and spatial tendons are ported (lane-constr units 1 to 4, `f8352c5`, `97380ea`, 7d505fc; unit 5, full implicit + midpoint, `c096364`): `check.sh gravcomp`, `check.sh equality | equality_contact | mocap`, fixtures
 `kinestride/models/eq_*.xml`.
 
