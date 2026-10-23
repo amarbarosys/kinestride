@@ -82,8 +82,8 @@ if [ "$stage" = city ]; then  # the endless city (city.mojo, CPU build): point m
   echo "PASS all city checks"; exit 0
 fi
 if [ "$stage" = living ]; then  # Living World ground (living.mojo, CPU build): nodes, torus wrap, lw_hit vs a brute march
-  WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/web/world.bin}
-  WEB=$(cd "$(dirname "$WB")/.." && node -e "import('./web/world.mjs').then(m => console.log(m.TREE_CONES.flatMap(c => [...c, [0, 0, 0]].slice(0, 2).flat()).join(',')))")
+  WB=${LIVING_BIN:-$HOME/Projects/browser-games/living-world/world/world.bin}  # living-world 4709966 moved web/ to world/
+  WEB=$(cd "$(dirname "$WB")" && node -e "import('./world.mjs').then(m => console.log(m.TREE_CONES.flatMap(c => [...c, [0, 0, 0]].slice(0, 2).flat()).join(',')))")
   C="mojo build -I kinestride kinestride/living_check.mojo -o $X/living/check && $X/living/check $WB $WEB"
   mkdir -p $X/living; PATH=$PWD/.venv/bin:$PATH bash -c "$C" || { echo "FAIL living check"; fail=$((fail+1)); }
   for m in 's/((j % n) + n) % n \* n + ((i % n) + n) % n/j * n + i/' 's/    if fx >= fy:/    if fx < fy:/' 's/CROWN = SIMD\[DType.float32, 8\](0.085,/CROWN = SIMD[DType.float32, 8](0.17,/' 's/F4(0.65, 1, 0.2, 1) if part == 0/F4(0.3, 1, 0.2, 1) if part == 0/' 's/if mx < my:/if mx > my:/' 's/% tn \* tn + ((i % tn)/% tn * n + ((i % tn)/'; do
@@ -179,8 +179,12 @@ if [ "$stage" = eqact_runtime ]; then  # runtime eq_active (mj_instantiateEquali
   EF=$($M -c "from kinestride.model import with_inactive; print(with_inactive('kinestride/models/eq_test.xml', '$X/eqr/fixture.xml'))")
   ES=$($M -c "from kinestride.model import with_inactive, with_tendon_equalities; print(with_inactive(with_tendon_equalities('kinestride/models/spider_test.xml', '$X/eqr/spider0.xml', tolerance=0, fixed=True), '$X/eqr/spider.xml'))")
   EY=$($M -c "from kinestride.model import with_inactive, with_spatial_tendons, with_tendon_equalities; print(with_inactive(with_tendon_equalities(with_spatial_tendons('${BODY:-.work/assets/fly/body.xml}', '$X/eqr/fly0.xml'), '$X/eqr/fly1.xml', tolerance=0), '$X/eqr/fly.xml'))")
+  # eq_test with joint limits and dof friction loss too (with_frictionloss, with_joint_limits): the block carries 8 equalities, then 16
+  # friction and 14 limit rows; -DEQACT reads one host row per equality (NEQE), none for those rows (they were 38 rows, ctrl.bin 8)
+  EM=$($M -c "from kinestride.model import with_inactive, with_joint_limits, with_frictionloss; print(with_inactive(with_joint_limits(with_frictionloss('kinestride/models/eq_test.xml', '$X/eqr/fl.xml', tolerance=0), '$X/eqr/fljl.xml', solref=0.1, tolerance=0), '$X/eqr/mixed.xml'))")
   for a in "" 1; do  # EQACT unset: eq_active0 held; EQACT=1: random on/off per equality per state
     EQACT=$a $M -m kinestride.model check $EF $X/eqr/fixture$a equality 64 || { echo "FAIL eqact_runtime fixture EQACT=$a"; fail=$((fail+1)); }
+    EQACT=$a $M -m kinestride.model check $EM $X/eqr/mixed$a equality 64 || { echo "FAIL eqact_runtime mixed EQACT=$a"; fail=$((fail+1)); }
     EQACT=$a $M -m kinestride.model check $ES $X/eqr/spider$a tendon_eq 64 || { echo "FAIL eqact_runtime spider EQACT=$a"; fail=$((fail+1)); }
     EQACT=$a REL=2e-3 $M -m kinestride.model check $EY $X/eqr/fly$a tendon_eq 64 || { echo "FAIL eqact_runtime fly EQACT=$a"; fail=$((fail+1)); }
   done
@@ -190,6 +194,9 @@ if [ "$stage" = eqact_runtime ]; then  # runtime eq_active (mj_instantiateEquali
     $M -m kinestride.model check $EF $X/mutant equality 64 || fail=$((fail+1))
   ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/            on = ctrl\[(NU + 7 \* NMOCAP + 7 \* NXF + e) \* F + f\]/            on *= ctrl[(NU + 7 * NMOCAP + 7 * NXF + e) * F + f]/' -- \
     $M -m kinestride.eqact_rollout $EF $X/mutant 64 12 || fail=$((fail+1))
+  # the gate must fail with one host row per block entry (friction and limit rows included), the clash before NEQE
+  EQACT=1 ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/(NEQE if EQACT else 0)/(NEQ if EQACT else 0)/' -- \
+    $M -m kinestride.model check $EM $X/mutant equality 64 || fail=$((fail+1))
   CPU=0 EQACT=1 $M -m kinestride.model check $EF $X/eqr/gpu equality 64 || { echo "FAIL eqact_runtime card"; fail=$((fail+1)); }
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all eqact_runtime checks"; exit 0
@@ -489,7 +496,7 @@ if [ "$stage" = tendon_limit ]; then  # tendon limit rows (mj_instantiateLimit, 
   # the gate must fail with: the limit side flipped, the margin dropped, the row made bilateral (force while jar >= 0), the Jacobian sign dropped
   for mut in 's/var dist = side \* (mf\[ef + 24\] - L)/var dist = -side * (mf[ef + 24] - L)/' \
              's/cpos\[0\] = dist - mf\[ef + 25\]/cpos[0] = dist/' \
-             's/if rbase + k >= NEQB and jar >= 0:/if False:/' \
+             's/if r >= NEQL and jar >= 0:/if False:/' \
              's/= -side \* ten_j(mi, mf, res, f, t, Int(mi\[CEQC + choff + c\])) if on/= side * ten_j(mi, mf, res, f, t, Int(mi[CEQC + choff + c])) if on/'; do
     ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $TS $X/mutant tendon_limit 64 || fail=$((fail+1))
   done
@@ -524,6 +531,221 @@ if [ "$stage" = tendon_eq ]; then  # tendon equality rows (mjEQ_TENDON, mj_insta
     $M -m kinestride.model check $ST $X/mutant tendon_eq 64 || fail=$((fail+1))
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all tendon_eq checks"; exit 0
+fi
+if [ "$stage" = frictionloss ]; then  # dof friction-loss rows (mj_instantiateFriction, engine_core_constraint.c:1207) on the equality block, Huber
+  # cost in Newton (quadratic inside +-R frictionloss, linear outside): the fly and the spider with a frictionloss on every joint at a
+  # quantile of the force its rows take unbounded (model.with_frictionloss; zones from the final jar, negative/quadratic/positive rows
+  # over 64 states: spider 0.5 653/1780/703, fly 0.05 1290/1619/1827; MuJoCo's efc_state after mj_forward is stale on friction rows,
+  # never count zones from it), contacts and limits off, noslip 0, tolerance 0, vs mj_step.
+  S=kinestride/smooth.mojo; mkdir -p $X/fl
+  FF=$($M -c "from kinestride.model import with_frictionloss; print(with_frictionloss('${BODY:-.work/assets/fly/body.xml}', '$X/fl/fly.xml', quantile=0.05, tolerance=0))")
+  SF=$($M -c "from kinestride.model import with_frictionloss; print(with_frictionloss('kinestride/models/spider_test.xml', '$X/fl/spider.xml', tolerance=0))")
+  for B in $FF $SF; do
+    $M -m kinestride.model check $B $X/fl/$(basename $B .xml) frictionloss 64 || { echo "FAIL frictionloss $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the linear-zone force sign flipped, the zone bound without R, the line search's linear slope sign flipped
+  for mut in 's/force = fl if jar < 0 else -fl/force = -fl if jar < 0 else fl/' \
+             's/var Rf = floss(mf, r) \/ get(res, f, OEQD + r)/var Rf = floss(mf, r)/' \
+             's/q1 += -fl \* jv/q1 += fl * jv/'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $SF $X/mutant frictionloss 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all frictionloss checks"; exit 0
+fi
+if [ "$stage" = tendon_friction ]; then  # tendon friction-loss rows (mj_instantiateFriction, engine_core_constraint.c:1240) after the dof
+  # rows on the equality block, J = ten_J: models/tendon_spatial.xml (spatial and fixed tendons), the spider with one fixed tendon
+  # (the non-spatial ten_J path), the fly and the spider with three spatial tendons; every tendon's frictionloss at the median of the
+  # force its row would take alone (model.with_tendon_friction; zones from the final jar, negative/quadratic/positive rows over 64
+  # states: fixture 35/300/49, fixed 21/28/15, fly 104/13/75, spider 35/116/41), contacts, limits and joint friction off, noslip 0, tolerance 0.
+  S=kinestride/smooth.mojo; mkdir -p $X/tf
+  TF=$($M -c "from kinestride.model import with_tendon_friction; print(with_tendon_friction('kinestride/models/tendon_spatial.xml', '$X/tf/fixture.xml', tolerance=0))")
+  XF=$($M -c "from kinestride.model import with_tendon_friction; print(with_tendon_friction('kinestride/models/spider_test.xml', '$X/tf/fixed.xml', tolerance=0, fixed=True))")
+  FT=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_friction; print(with_tendon_friction(with_spatial_tendons('${BODY:-.work/assets/fly/body.xml}', '$X/tf/fly0.xml'), '$X/tf/fly.xml', tolerance=0))")
+  ST=$($M -c "from kinestride.model import with_spatial_tendons, with_tendon_friction; print(with_tendon_friction(with_spatial_tendons('kinestride/models/spider_test.xml', '$X/tf/spider0.xml'), '$X/tf/spider.xml', tolerance=0))")
+  for B in $TF $XF $FT; do
+    $M -m kinestride.model check $B $X/tf/$(basename $B .xml) tendon_friction 64 || { echo "FAIL tendon_friction $(basename $B .xml)"; fail=$((fail+1)); }
+  done
+  # the spider's spatial ten_J carries its own float32 error, 1.15e-5 (spatial(), the same figure tendon_limit measured), and qacc
+  # follows it (1.40e-5): bar 2e-5 there
+  REL=2e-5 $M -m kinestride.model check $ST $X/tf/spider tendon_friction 64 || { echo "FAIL tendon_friction spider"; fail=$((fail+1)); }
+  # the gate must fail with: the tendon Jacobian doubled, a tendon row taken for a dof row (J = 1 on dof t)
+  for mut in 's/res\[(jb + c) \* F + f\] = ten_j(mi, mf, res, f, t, Int(mi\[CEQC + choff + c\]))$/res[(jb + c) * F + f] = 2 * ten_j(mi, mf, res, f, t, Int(mi[CEQC + choff + c]))/' \
+             's/        if typ == 6:  # dof friction loss/        if typ == 6 or typ == 7:  # dof friction loss/'; do
+    ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $TF $X/mutant tendon_friction 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all tendon_friction checks"; exit 0
+fi
+if [ "$stage" = condim46 ]; then  # torsional and rolling friction (condim 4 and 6, mj_instantiateContact's rotational rows), pyramidal
+  # and elliptic, Newton, noslip 0. Precision on models/spin_test.xml (octahedra on a floor at condim 3, 4 and 6, one vertex down,
+  # spinning and rolling; a sphere on a ball joint touching its parent at condim 6, geom1 the child; model.spin_states): 1e-5,
+  # both cones. Coverage on the fly's foot pairs at condim 4 and 6 (ENGINE_OPT condim; torsion 0.02, rolling 1e-4 as shipped),
+  # both cones, at REL 2.5e-4: the stance's float32 error grows with the extra rows (measured on 64 standing states: pyramidal
+  # condim 6 qfrc_constraint 1.93e-4 against a 4.5e-5 input floor, condim 4 1.02e-4, elliptic condim 4 qacc_euler 4.3e-5,
+  # condim 6 1.55e-4, all on the root's yaw and lateral dofs; a 10x tighter Newton stop leaves it unchanged; condim 6 with
+  # torsion and rolling 0 stays at 2.1x its floor, condim 3 at 2.7x), while the same rows on the fixture sit at 2e-6.
+  S=kinestride/smooth.mojo; mkdir -p $X/c46
+  SP=$($M -c "from kinestride.model import spin_states; print(spin_states('kinestride/models/spin_test.xml', '$X/c46/spin-states.npz'))")
+  for c in 0 1; do
+    STATES=$SP ENGINE_OPT=cone=$c $M -m kinestride.model check kinestride/models/spin_test.xml $X/c46/spin$c contact 64 || { echo "FAIL condim46 spin_test cone $c"; fail=$((fail+1)); }
+  done
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('${BODY:-.work/assets/fly/body.xml}', 0))")
+  for c in 4 6; do
+    REL=2.5e-4 ENGINE_OPT=condim=$c,noslip=0 $M -m kinestride.model check ${BODY:-.work/assets/fly/body.xml} $X/c46/fly$c contact 64 || { echo "FAIL condim46 fly pyramidal $c"; fail=$((fail+1)); }
+    REL=2.5e-4 ENGINE_OPT=condim=$c $M -m kinestride.model check $E0 $X/c46/flyell$c contact 64 || { echo "FAIL condim46 fly elliptic $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: pyramidal: the rotational Jacobian's geom1 sign dropped, a pyramid edge's sign, torsion about a tangent;
+  # elliptic: rolling rows' R left at R1, the middle zone's tangential force sign, the line search's cone slope sign
+  for mut in 's/var jr = ang \* sg$/var jr = ang/' 's/(sc\[kk\] if k % 2 == 0 else -sc\[kk\])/(sc[kk] if k % 2 == 0 else sc[kk])/' \
+             's/jc\[3\] = (normal \* jr).reduce_add()/jc[3] = (y * jr).reduce_add()/'; do
+    STATES=$SP ENGINE_OPT=cone=0 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check kinestride/models/spin_test.xml $X/mutant contact 64 || fail=$((fail+1))
+  done
+  for mut in 's/D\[j + 1\] = 1 \/ (R1 \* f0 \* f0 \/ (sc\[j + 1\] \* sc\[j + 1\]))/D[j + 1] = 1 \/ R1/' \
+             's/force = -fnorm \/ T \* U \* sc/force = fnorm \/ T * U * sc/' 's/t\[4\] += Dm \* (N - mu \* T) \* (V0 - mu \* T1)/t[4] -= Dm * (N - mu * T) * (V0 - mu * T1)/'; do
+    STATES=$SP ENGINE_OPT=cone=1 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check kinestride/models/spin_test.xml $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all condim46 checks"; exit 0
+fi
+if [ "$stage" = freefree ]; then  # contact pairs across two free bodies (two floating origins, docs/plans/FREE_FREE.md): models/free_pair.xml,
+  # bodies 2 m from the world origin, a sphere-sphere pair and a mesh-mesh pair (CONVEX=1), nearby states, pyramidal and elliptic, 1e-5;
+  # CROSS_MIN: at least 16 of 64 states must carry a cross-tree contact (a pass without one is vacuous)
+  S=kinestride/smooth.mojo; FP=kinestride/models/free_pair.xml; mkdir -p $X/ff
+  for c in 0 1; do
+    ENGINE_OPT=cone=$c CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $FP $X/ff/c$c contact 64 || { echo "FAIL freefree cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail (elliptic) with: geom1's origin shift dropped in the sphere path and in the convex path, geom1's Jacobian side on geom2's com
+  for mut in 's/^        pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/        pos1 = pos1/' \
+             's/^                pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/                pos1 = pos1/' \
+             's/var off1 = cpos - com1/var off1 = cpos - com/'; do
+    ENGINE_OPT=cone=1 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $FP $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all freefree checks"; exit 0
+fi
+if [ "$stage" = pair_cross_animal ]; then  # explicit pairs between two articulated animals in one model (docs/plans/CROSS_ANIMAL.md):
+  # model.with_pair_animals: spider_test and a copy (prefix b_), gravity 0, the copy pushed into the animal; MuJoCo's rollout picks the
+  # touching pairs and 64 clean contact states (contacts in 56/64, no degenerate overlap; STATES=). Primitive pairs (CONVEX=1), both cones;
+  # bars from the contact stage's float32 input floor (MuJoCo moves qacc 1.5e-4 on rounded input: stiff contacts between light legs).
+  S=kinestride/smooth.mojo; mkdir -p $X/pa
+  PA=$($M -c "from kinestride.model import with_pair_animals; print(with_pair_animals('kinestride/models/spider_test.xml', '$X/pa/two.xml', '$X/pa/states.npz'))")
+  for c in 0 1; do
+    STATES=$X/pa/states.npz ENGINE_OPT=cone=$c CONVEX=1 STONES=1 CROSS_MIN=16 $M -m kinestride.model check $PA $X/pa/c$c contact 64 || { echo "FAIL pair_cross_animal cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: geom1's origin shift dropped (convex_pair, where the primitive pairs go), geom1's Jacobian side on geom2's com
+  for mut in 's/^        pos1 = pos1 + (origin(mi, qpos, f, Int(mi\[GBODY + g1\])) - origin(mi, qpos, f, b))/        pos1 = pos1/' \
+             's/var off1 = cpos - com1/var off1 = cpos - com/'; do
+    STATES=$X/pa/states.npz ENGINE_OPT=cone=0 CONVEX=1 STONES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $PA $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all pair_cross_animal checks"; exit 0
+fi
+if [ "$stage" = pgs_full ]; then  # PGS over every row kind and islands across trees (docs/plans/PGS_FULL.md), ENGINE_OPT solver=0, vs MuJoCo per
+  # state with a fresh MjData (PGS stops unconverged: the warmstart and the visiting order are part of the answer). The fly elliptic
+  # (model.elliptic, noslip 0); the fly in the arena with convex pairs, noslip 0 (noslip after PGS with convex pairs is refused: one
+  # state of 64 moved 0.28 off MuJoCo, open), REL 4e-3: measured 3.1e-3 on qfrc_constraint against a 3.9e-4 input floor, Newton on
+  # the same states 1.7e-3 under the arena's 3e-3; the eqact mixed fixture (equalities, joint limits, dof friction loss), EQACT unset
+  # and 1; cross_world (pairs, equalities, a tendon limit across two trees: one island); models/islands.xml (two islands, one of three
+  # trees) at 1e-5; free_pair (one island of two trees) pyramidal
+  # at 1e-5 and elliptic at REL 5e-5 (MuJoCo stops at the 100-sweep cap in most states; float32 QCQP moves the unconverged
+  # iterate: median 4.3e-7, worst 3.7e-5).
+  export CPU=${CPU:-0}; S=kinestride/smooth.mojo; I=$X/pgs; mkdir -p $I
+  F=${BODY:-.work/assets/fly/body.xml}
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('$F', 0))")
+  EM=$($M -c "from kinestride.model import with_inactive, with_joint_limits, with_frictionloss; print(with_inactive(with_joint_limits(with_frictionloss('kinestride/models/eq_test.xml', '$I/fl.xml', tolerance=0), '$I/fljl.xml', solref=0.1, tolerance=0), '$I/mixed.xml'))")
+  W0=$($M -c "from kinestride.model import shifted; print(shifted('kinestride/models/cross_world.xml', '$I/w0.xml', 0))")
+  FP=kinestride/models/free_pair.xml
+  ENGINE_OPT=solver=0 $M -m kinestride.model check $E0 $I/ell actuated 64 || { echo "FAIL pgs_full fly elliptic"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=0,noslip=0 CONVEX=1 REL=4e-3 $M -m kinestride.model check $F $I/arena actuated 64 || { echo "FAIL pgs_full fly arena"; fail=$((fail+1)); }
+  for a in "" 1; do
+    EQACT=$a ENGINE_OPT=solver=0 $M -m kinestride.model check $EM $I/mixed$a equality 64 || { echo "FAIL pgs_full mixed EQACT=$a"; fail=$((fail+1)); }
+  done
+  for st in equality tendon_limit; do
+    ENGINE_OPT=solver=0,noslip=0 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $W0 $I/cw$st $st 64 || { echo "FAIL pgs_full cross_world $st"; fail=$((fail+1)); }
+  done
+  ENGINE_OPT=solver=0,cone=0 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $FP $I/ff0 contact 64 || { echo "FAIL pgs_full free_pair pyramidal"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=0,cone=1 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 REL=5e-5 $M -m kinestride.model check $FP $I/ff1 contact 64 || { echo "FAIL pgs_full free_pair elliptic"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=0 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check kinestride/models/islands.xml $I/isl contact 64 || { echo "FAIL pgs_full islands"; fail=$((fail+1)); }
+  # the gate must fail with: the friction-loss clamp dropped, the warmstart's dual-cost test reversed (mixed fixture); the ray update's
+  # sign (fly elliptic); the island union across trees dropped (models/islands.xml: two islands in every state, the three-tree
+  # chain's B-C rows then form their own island; PGS stops at 100 sweeps there, so the visiting order shows)
+  for mut in 's/                    new = min(max(new, -fl), fl)/                    new = new/' 's/    if cost > 0:/    if cost < 0:/'; do
+    ENGINE_OPT=solver=0 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $EM $I/mutant equality 64 || fail=$((fail+1))
+  done
+  ENGINE_OPT=solver=0 ~/iTools/bin/mutant-check $S 's/var x = -(o \* rs).reduce_add() \/ denom/var x = (o * rs).reduce_add() \/ denom/' -- \
+    $M -m kinestride.model check $E0 $I/mutant actuated 64 || fail=$((fail+1))
+  ENGINE_OPT=solver=0 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S 's/res\[(OGU + t) \* F + f\] = Float32(first)/res[(OGU + t) * F + f] = Float32(t)/' -- \
+    $M -m kinestride.model check kinestride/models/islands.xml $I/mutant contact 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all pgs_full checks"; exit 0
+fi
+if [ "$stage" = cg_full ]; then  # CG (mj_solCG) over every row kind: Newton's update, line search and gradient already carry the equality
+  # block and the cone, CG adds no Hessian; ENGINE_OPT solver=1, vs MuJoCo per state with a fresh MjData. The engine's CG is one block
+  # and runs on past MuJoCo's float32-early stops (see newton()); a step whose line search returns alpha < 0 restarts Polak-Ribiere
+  # (free_pair elliptic state 43 overflowed to NaN without it). Bars where float32 CG's own accuracy sits above 1e-5 (measured): the
+  # arena REL 6e-3 (4.9e-3; Newton 1.7e-3, PGS 3.1e-3 on the same states), the mixed fixture REL 4e-4: qacc 1.06e-5 (Newton 4e-7),
+  # qacc_euler 1.17e-4 and with EQACT 2.86e-4 (the equality stage's own qacc_euler bar is 1e-4: M^-1 amplifies the light dofs).
+  S=kinestride/smooth.mojo; I=$X/cg; mkdir -p $I
+  F=${BODY:-.work/assets/fly/body.xml}
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('$F', 0))")
+  EM=$($M -c "from kinestride.model import with_inactive, with_joint_limits, with_frictionloss; print(with_inactive(with_joint_limits(with_frictionloss('kinestride/models/eq_test.xml', '$I/fl.xml', tolerance=0), '$I/fljl.xml', solref=0.1, tolerance=0), '$I/mixed.xml'))")
+  W0=$($M -c "from kinestride.model import shifted; print(shifted('kinestride/models/cross_world.xml', '$I/w0.xml', 0))")
+  FP=kinestride/models/free_pair.xml
+  ENGINE_OPT=solver=1 $M -m kinestride.model check $E0 $I/ell actuated 64 || { echo "FAIL cg_full fly elliptic"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1,noslip=0 CONVEX=1 REL=6e-3 $M -m kinestride.model check $F $I/arena actuated 64 || { echo "FAIL cg_full fly arena"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1 REL=4e-4 $M -m kinestride.model check $EM $I/mixed equality 64 || { echo "FAIL cg_full mixed"; fail=$((fail+1)); }
+  EQACT=1 ENGINE_OPT=solver=1 REL=4e-4 $M -m kinestride.model check $EM $I/mixed1 equality 64 || { echo "FAIL cg_full mixed EQACT=1"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1,noslip=0 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $W0 $I/cweq equality 64 || { echo "FAIL cg_full cross_world equality"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1,noslip=0 $M -m kinestride.model check $W0 $I/cwtl tendon_limit 64 || { echo "FAIL cg_full cross_world tendon_limit"; fail=$((fail+1)); }
+  ENGINE_OPT=solver=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check kinestride/models/islands.xml $I/isl contact 64 || { echo "FAIL cg_full islands"; fail=$((fail+1)); }
+  for c in 0 1; do
+    ENGINE_OPT=solver=1,cone=$c CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 $M -m kinestride.model check $FP $I/ff$c contact 64 || { echo "FAIL cg_full free_pair cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the descent restart dropped (free_pair elliptic: NaN on the CPU engine, state 43; the card's float path
+  # does not overflow there, so this one runs CPU=1), the Polak-Ribiere numerator's difference summed (mixed)
+  CPU=1 ENGINE_OPT=solver=1,cone=1 CONVEX=1 STONES=1 NEAR_STATES=1 CROSS_MIN=16 ~/iTools/bin/mutant-check $S 's/            if alpha < 0:  # the search was not a descent direction/            if False:  # the search was not a descent direction/' -- \
+    $M -m kinestride.model check $FP $I/mutant contact 64 || fail=$((fail+1))
+  ENGINE_OPT=solver=1 REL=4e-4 ~/iTools/bin/mutant-check $S 's/(get(res, f, OCGM + v) - get(res, f, OCGMO + v))/(get(res, f, OCGM + v) + get(res, f, OCGMO + v))/' -- \
+    $M -m kinestride.model check $EM $I/mutant equality 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all cg_full checks"; exit 0
+fi
+if [ "$stage" = elliptic_int ]; then  # the elliptic cone under implicitfast and RK4 (model.elliptic: the fly, noslip 0, MuJoCo to tolerance 0),
+  # on standing states from an Euler rollout of the same model: implicitfast with kv 0.01 (the integrator stage's servos), RK4 at
+  # dt 1e-7 (the rk4 stage's: stiff contacts flip MuJoCo's own ncon between its four passes above that). RK4 within 1e-5 and the
+  # floors; implicitfast at REL 1e-4: the card measured qfrc_constraint 6.7e-5 and qacc_euler 3.8e-5 (the cone's 15x-floor bars 6.4e-5,
+  # 3.7e-5), the CPU engine 2.1e-5 on the same states.
+  S=kinestride/smooth.mojo; I=$X/ei; mkdir -p $I
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('${BODY:-.work/assets/fly/body.xml}', 0))")
+  A=$(env -u ENGINE_OPT $M -m kinestride.model airborne $E0 $I/air 0 | tail -1)
+  ENGINE_OPT=integrator=3,kv=0.01 STATES=$A REL=1e-4 $M -m kinestride.model check $E0 $I/impl actuated 64 || { echo "FAIL elliptic_int implicitfast"; fail=$((fail+1)); }
+  ENGINE_OPT=integrator=1,dt=1e-7 STATES=$A $M -m kinestride.model check $E0 $I/rk4 actuated 64 || { echo "FAIL elliptic_int rk4"; fail=$((fail+1)); }
+  # the gate must fail with: the cone's tangential force sign (RK4), Dm without (1 + mu^2) (implicitfast)
+  ENGINE_OPT=integrator=1,dt=1e-7 STATES=$A ~/iTools/bin/mutant-check $S 's/force = V3(f0, -f0 \/ T \* U\[1\] \* fr\[1\], -f0 \/ T \* U\[2\] \* fr\[2\], 0)/force = V3(f0, f0 \/ T * U[1] * fr[1], f0 \/ T * U[2] * fr[2], 0)/' -- \
+    $M -m kinestride.model check $E0 $I/mutant actuated 64 || fail=$((fail+1))
+  ENGINE_OPT=integrator=3,kv=0.01 STATES=$A REL=1e-4 ~/iTools/bin/mutant-check $S 's/(mu \* mu \* (1 + mu \* mu))/(mu * mu)/' -- \
+    $M -m kinestride.model check $E0 $I/mutant actuated 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all elliptic_int checks"; exit 0
+fi
+if [ "$stage" = meshmesh0 ]; then  # margin-0 box-mesh and mesh-mesh pairs: mjc_Convex's maxContacts 4, multicontact's polygon clipping
+  # (engine_collision_gjk.c:1457-2205, convex.mojo) on models/clip_test.xml (cube mesh on cube mesh, box on cube mesh, octahedron edge
+  # on cube mesh; free bodies, no floor), model.clip_states: half the states within 3e-4 rad of face-aligned (MuJoCo: 10 contacts,
+  # 4 + 4 + 2), half tilted 0.05 rad (3 to 5); pyramidal and elliptic, 1e-5 and the floors.
+  S=kinestride/convex.mojo; CT=kinestride/models/clip_test.xml; mkdir -p $X/mm0
+  SP=$($M -c "from kinestride.model import clip_states; print(clip_states('$CT', '$X/mm0/states.npz'))")
+  for c in 0 1; do
+    ENGINE_OPT=cone=$c STATES=$SP CONVEX=1 STONES=1 $M -m kinestride.model check $CT $X/mm0/c$c contact 64 || { echo "FAIL meshmesh0 cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the clipping planes' orientation flipped, the contact offset along the face normal reversed, the face
+  # alignment test never met (single EPA contacts)
+  for mut in 's/        pn\[i\] = cross(v2 - v1, n)/        pn[i] = cross(n, v2 - v1)/' \
+             's/    polygon_clip(st, face1, nface1, face2, nface2, n1\[ri\], n2\[rj\] \* norm(dir))/    polygon_clip(st, face1, nface1, face2, nface2, n1[ri], n2[rj] * (-norm(dir)))/' \
+             's/            if dot(v\[i\], w\[j\]) < -FACE_TOL:/            if dot(v[i], w[j]) < -2 * FACE_TOL:/'; do
+    STATES=$SP CONVEX=1 STONES=1 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $CT $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all meshmesh0 checks"; exit 0
 fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
@@ -881,10 +1103,10 @@ if [ "$stage" = solver ]; then  # CG and PGS (mj_solCG, mj_solPGS) vs MuJoCo wit
   for SV in 1 0; do
     REL=2e-4 ENGINE_OPT=solver=$SV STATES=$AF $M -m kinestride.model check $FW $I/ff$SV actuated 64 || { echo "FAIL solver=$SV two-fly world"; fail=$((fail+1)); }
   done
-  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/            if Int(mi\[ROOT + Int(mi\[CPH + 11 \* rp + 2\])\]) == troot:/            if True:/' -- \
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/            if t == troot:/            if True:/' -- \
     env REL=2e-4 ENGINE_OPT=solver=0 STATES=$AF $M -m kinestride.model check $FW $I/mutant actuated 64 || fail=$((fail+1))
   # mutants: PGS projection (force clamped at 0 -> min), CG Polak-Ribiere beta sign
-  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/var new = max(old - rs \* get(res, f, OGA + r), Float32(0))/var new = min(old - rs * get(res, f, OGA + r), Float32(0))/' -- \
+  ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/                    new = max(new, Float32(0))/                    new = min(new, Float32(0))/' -- \
     env ENGINE_OPT=solver=0 STATES=$A $M -m kinestride.model check $F $I/mutant actuated 64 || fail=$((fail+1))
   ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/var beta = max(num \/ max(den, Float32(1e-15)), Float32(0))/var beta = max(-num \/ max(den, Float32(1e-15)), Float32(0))/' -- \
     env ENGINE_OPT=solver=1 STATES=$A $M -m kinestride.model check $F $I/mutant actuated 64 || fail=$((fail+1))

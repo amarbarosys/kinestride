@@ -91,6 +91,12 @@ struct Shape[o: MutOrigin](Copyable):
     var vertindex: Int
     var meshindex: Int
     var prism: Array[V, 6]
+    var pmv: Pointer[Int32, Self.o]  # margin-0 multicontact (model.py polygon block), mesh: per hull vertex its polygons' adr and count into pmap
+    var pmap: Pointer[Int32, Self.o]  # polygon ids
+    var ppoly: Pointer[Int32, Self.o]  # per polygon its vertex adr and count into pvert
+    var pvert: Pointer[Int32, Self.o]  # polygon vertices, hull-local
+    var pnorm: Pointer[Float32, Self.o]  # per polygon its normal, geom frame
+    var npoly: Int  # 0: no polygon data (multicontact returns)
 
     def __init__(out self, verts: Pointer[Float32, Self.o], first: Pointer[Int32, Self.o], edges: Pointer[Int32, Self.o]):
         self.kind = 0
@@ -107,6 +113,12 @@ struct Shape[o: MutOrigin](Copyable):
         self.vertindex = -1
         self.meshindex = -1
         self.prism = Array[V, 6](fill=V(0))
+        self.pmv = first
+        self.pmap = first
+        self.ppoly = first
+        self.pvert = first
+        self.pnorm = verts
+        self.npoly = 0
 
     @always_inline
     def local(self, d: V) -> V:
@@ -271,6 +283,9 @@ struct Status(Copyable):
     var epa_status: Int
     var simplex: Array[Vertex, 4]
     var nsimplex: Int
+    var multi: Bool  # multicontact wrote its contacts: nx of them in xs1, xs2 (x1, x2 keep EPA's witness pair)
+    var xs1: Array[V, 4]
+    var xs2: Array[V, 4]
 
     def __init__(out self):
         self.dist = 0
@@ -286,6 +301,9 @@ struct Status(Copyable):
         self.epa_status = -1
         self.simplex = Array[Vertex, 4](fill=Vertex())
         self.nsimplex = 0
+        self.multi = False
+        self.xs1 = Array[V, 4](fill=V(0))
+        self.xs2 = Array[V, 4](fill=V(0))
 
 
 # ---------------------------------------- GJK (engine_collision_gjk.c:177) --------------------------------
@@ -1197,7 +1215,9 @@ def ccd(mut st: Status, mut o1: Sp, mut o2: Sp) -> S:
             ret = polytope4(pt, st, o1, o2)
         st.epa_status = ret
         if ret == 0:
-            _ = epa(st, pt, o1, o2)
+            var face = epa(st, pt, o1, o2)
+            if st.max_contacts > 1 and face >= 0:
+                multicontact(pt, face, st, o1, o2)
     return st.dist
 
 
@@ -1274,6 +1294,31 @@ def penetration(mut o1: Sp, mut o2: Sp, margin: S, tol: S, max_contacts: Int) ->
         c.pos = (st.x1 + st.x2) * S(0.5)
         c.normal = contact_normal(st)
     return c^
+
+
+def penetration_set(mut o1: Sp, mut o2: Sp, margin: S, tol: S, max_contacts: Int) -> ConSet:
+    """mjc_penetration with max_contacts > 1 (margin 0, boxes and meshes): every contact multicontact found (else EPA's one),
+    each at EPA's depth: dist margin + depth, pos the witness midpoint, normal x1 - x2."""
+    o1.margin = margin
+    o2.margin = margin
+    var st = Status()
+    st.tolerance = tol
+    st.max_contacts = max_contacts
+    var d = ccd(st, o1, o2)
+    var cs = ConSet()
+    if d < 0:
+        if st.multi:
+            cs.n = st.nx
+            for i in range(st.nx):
+                cs.dist[i] = margin + d
+                cs.pos[i] = (st.xs1[i] + st.xs2[i]) * S(0.5)
+                cs.normal[i] = normalize3(st.xs1[i] - st.xs2[i])
+        else:
+            cs.n = 1
+            cs.dist[0] = margin + d
+            cs.pos[0] = (st.x1 + st.x2) * S(0.5)
+            cs.normal[0] = contact_normal(st)
+    return cs^
 
 
 struct ConSet(Copyable):
@@ -1430,6 +1475,14 @@ def collide(mut o1: Sp, mut o2: Sp, margin: S, tol: S, rbound: S, multi: Bool = 
     var org = o2.pos
     o1.pos = o1.pos - org
     o2.pos = V(0)
+    if margin == 0 and (o1.kind == BOX or o1.kind == MESH) and (o2.kind == BOX or o2.kind == MESH):  # maxContacts 4: the
+        # native multicontact (polygon clipping), no perturbation search (mjc_Convex returns ncon)
+        var cm = penetration_set(o1, o2, margin, tol, 4)
+        for i in range(cm.n):
+            cm.pos[i] = cm.pos[i] + org
+        o1.pos = o1.pos + org
+        o2.pos = org
+        return cm^
     var cs = ConSet()
     var c0 = penetration(o1, o2, margin, tol, 1)
     if c0.n > 0:
@@ -1485,6 +1538,452 @@ def collide(mut o1: Sp, mut o2: Sp, margin: S, tol: S, rbound: S, multi: Bool = 
     o1.pos = o1.pos + org
     o2.pos = org
     return cs^
+
+
+# ---------------------------------------- multicontact (engine_collision_gjk.c:1457-2205) --------------------------------
+# Margin 0 between boxes and meshes (maxContacts 4): the faces EPA's final face touches are matched by their normals
+# (face-face, or a face against an edge) and one polygon is clipped by the other; up to 4 contacts share EPA's depth.
+# Mesh polygons come from model.py's polygon block, indices hull-local (MuJoCo's are mesh-vertex ids).
+
+comptime MAXPV = 16  # mjMAX_POLYVERT is 150; export refuses a polygon or a vertex's polygon list longer than this, so no cap differs
+comptime FACE_TOL = S(0.99999872)  # mjFACE_TOL
+comptime EDGE_TOL = S(0.00159999931)  # mjEDGE_TOL
+comptime PV = Array[V, MAXPV]
+comptime PI = Array[Int, MAXPV]
+
+
+@always_inline
+def area4(a: V, b: V, c: V, d: V) -> S:
+    var g = cross(d - a, b - d) + cross(c - b, a - c)
+    return S(0.5) * norm(g)
+
+
+def polygon_quad(poly: Array[V, 2 * MAXPV], n: Int) -> Array[Int, 4]:
+    """polygonQuad: the maximum-area quadrilateral of a convex polygon (indices), the C's pointer walk on indices."""
+    var a = 0; var b = 1; var c = 2; var d = 3
+    var res = Array[Int, 4](fill=0)
+    res[0] = a; res[1] = b; res[2] = c; res[3] = d
+    var m = area4(poly[a], poly[b], poly[c], poly[d])
+    while a < n:
+        while True:
+            var mn = area4(poly[a], poly[b], poly[c], poly[(d + 1) % n])
+            if mn <= m:
+                break
+            m = mn
+            d = (d + 1) % n
+            res[0] = a; res[1] = b; res[2] = c; res[3] = d
+            while True:
+                mn = area4(poly[a], poly[b], poly[(c + 1) % n], poly[d])
+                if mn <= m:
+                    break
+                m = mn
+                c = (c + 1) % n
+                res[0] = a; res[1] = b; res[2] = c; res[3] = d
+            while True:
+                mn = area4(poly[a], poly[(b + 1) % n], poly[c], poly[d])
+                if mn <= m:
+                    break
+                m = mn
+                b = (b + 1) % n
+                res[0] = a; res[1] = b; res[2] = c; res[3] = d
+        if b == a:
+            b = (b + 1) % n
+            if c == b:
+                c = (c + 1) % n
+                if d == c:
+                    d = (d + 1) % n
+        a += 1
+    return res^
+
+
+def polygon_clip(mut st: Status, face1: PV, nface1: Int, face2: PV, nface2: Int, n: V, dir: V):
+    """polygonClip: face2 clipped by the planes through face1's edges perpendicular to it (Sutherland-Hodgman), the result's
+    vertices are the contacts' x2 (x1 = x2 - dir); more than 4 pruned to the largest quadrilateral, duplicates dropped."""
+    if nface1 < 3:
+        return
+    var pn = PV(fill=V(0))
+    var pd = Array[S, MAXPV](fill=0)
+    for i in range(nface1):
+        var v1 = face1[i]; var v2 = face1[(i + 1) % nface1]
+        pn[i] = cross(v2 - v1, n)  # (v2 - v1) x ((v1 + n) - v1)
+        pd[i] = dot(pn[i], v1)
+    var poly = Array[V, 2 * MAXPV](fill=V(0))
+    var clipped = Array[V, 2 * MAXPV](fill=V(0))
+    var np = nface2
+    for i in range(nface2):
+        poly[i] = face2[i]
+    for e in range(nface1):
+        var nc = 0
+        for i in range(np):
+            var P = poly[i]
+            var Q = poly[i + 1] if i < np - 1 else poly[0]
+            var in1 = dot(P - face1[e], pn[e]) > -MINVAL
+            var in2 = dot(Q - face1[e], pn[e]) > -MINVAL
+            if not in1 and not in2:
+                continue
+            if in1 and in2:
+                clipped[nc] = Q
+                nc += 1
+                continue
+            var ab = Q - P
+            var tmp = dot(pn[e], ab)
+            if tmp != 0:
+                var t = (pd[e] - dot(pn[e], P)) / tmp
+                if t >= 0 and t <= 1:
+                    clipped[nc] = P + ab * t
+                    nc += 1
+            if in2:
+                clipped[nc] = Q
+                nc += 1
+        poly = clipped.copy()
+        np = nc
+    if np < 1:
+        return
+    st.multi = True
+    if np > 4:  # max_contacts 4 < 5
+        var r = polygon_quad(poly, np)
+        st.nx = 4
+        for i in range(4):
+            st.xs2[i] = poly[r[i]]
+            st.xs1[i] = poly[r[i]] - dir
+        return
+    var k = 0
+    for i in range(np):
+        var skip = False
+        for j in range(k):
+            if equal3(st.xs2[j], poly[i]):
+                skip = True
+                break
+        if skip:
+            continue
+        st.xs2[k] = poly[i]
+        st.xs1[k] = poly[i] - dir
+        k += 1
+    st.nx = k
+
+
+@always_inline
+def ipoly(o: Sp, k: Int) -> Int:
+    return Int(o.pmv[unsafe_offset=k])
+
+
+@always_inline
+def hvert(o: Sp, v: Int) -> V:
+    """Hull vertex v (hull-local), world frame."""
+    return o.world(V(S(o.verts[unsafe_offset=3 * v]), S(o.verts[unsafe_offset=3 * v + 1]), S(o.verts[unsafe_offset=3 * v + 2]), 0))
+
+
+@always_inline
+def rotn(o: Sp, l: V) -> V:
+    """mat l (globalcoord without pos)."""
+    return o.world(l) - o.pos
+
+
+def intersect2(o: Sp, a1: Int, n1: Int, arr2: Array[Int, 2], n2: Int) -> Array[Int, 3]:
+    """intersect: up to 2 common polygon ids of the list at pmap a1 (n1 long) and arr2; [count, id0, id1]."""
+    var r = Array[Int, 3](fill=0)
+    for i in range(n1):
+        var x = Int(o.pmap[unsafe_offset=a1 + i])
+        for j in range(n2):
+            if x == arr2[j]:
+                r[1 + r[0]] = x
+                r[0] += 1
+                if r[0] == 2:
+                    return r^
+    return r^
+
+
+def intersect_lists(o: Sp, a1: Int, n1: Int, a2: Int, n2: Int) -> Array[Int, 3]:
+    var r = Array[Int, 3](fill=0)
+    for i in range(n1):
+        var x = Int(o.pmap[unsafe_offset=a1 + i])
+        for j in range(n2):
+            if x == Int(o.pmap[unsafe_offset=a2 + j]):
+                r[1 + r[0]] = x
+                r[0] += 1
+                if r[0] == 2:
+                    return r^
+    return r^
+
+
+def mesh_normals(o: Sp, mut res: PV, mut idx: PI, dim: Int, v1: Int, v2: Int, v3: Int) -> Int:
+    """meshNormals: the polygon normals a vertex (all its polygons), an edge (up to 2) or a face (1) of the EPA face lies on."""
+    if dim == 3:
+        var e = intersect_lists(o, ipoly(o, 2 * v1), ipoly(o, 2 * v1 + 1), ipoly(o, 2 * v2), ipoly(o, 2 * v2 + 1))
+        if e[0] == 0:
+            return 0
+        var a2 = Array[Int, 2](fill=0)
+        a2[0] = e[1]; a2[1] = e[2]
+        var fset = intersect2(o, ipoly(o, 2 * v3), ipoly(o, 2 * v3 + 1), a2, e[0])
+        if fset[0] == 0:
+            return 0
+        res[0] = rotn(o, pnormal(o, fset[1]))
+        idx[0] = fset[1]
+        return 1
+    if dim == 2:
+        var e = intersect_lists(o, ipoly(o, 2 * v1), ipoly(o, 2 * v1 + 1), ipoly(o, 2 * v2), ipoly(o, 2 * v2 + 1))
+        for i in range(e[0]):
+            res[i] = rotn(o, pnormal(o, e[1 + i]))
+            idx[i] = e[1 + i]
+        return e[0]
+    if dim == 1:
+        var a = ipoly(o, 2 * v1); var nn = ipoly(o, 2 * v1 + 1)
+        for i in range(nn):
+            var pi = Int(o.pmap[unsafe_offset=a + i])
+            res[i] = rotn(o, pnormal(o, pi))
+            idx[i] = pi
+        return nn
+    return 0
+
+
+@always_inline
+def pnormal(o: Sp, pi: Int) -> V:
+    return V(S(o.pnorm[unsafe_offset=3 * pi]), S(o.pnorm[unsafe_offset=3 * pi + 1]), S(o.pnorm[unsafe_offset=3 * pi + 2]), 0)
+
+
+def mesh_edge_normals(o: Sp, mut res: PV, mut endverts: PV, dim: Int, v1: V, v2: V, v1i: Int) -> Int:
+    """meshEdgeNormals: an edge's direction (dim 2), or every edge into a vertex from its previous polygon vertex (dim 1)."""
+    if dim == 2:
+        endverts[0] = v2
+        res[0] = normalize3(v2 - v1)
+        return 1
+    if dim == 1:
+        var a = ipoly(o, 2 * v1i); var nn = ipoly(o, 2 * v1i + 1)
+        for i in range(nn):
+            var pi = Int(o.pmap[unsafe_offset=a + i])
+            var adr = Int(o.ppoly[unsafe_offset=2 * pi]); var nv = Int(o.ppoly[unsafe_offset=2 * pi + 1])
+            for j in range(nv):
+                if Int(o.pvert[unsafe_offset=adr + j]) == v1i:
+                    var k = nv - 1 if j == 0 else j - 1
+                    endverts[i] = hvert(o, Int(o.pvert[unsafe_offset=adr + k]))
+                    res[i] = normalize3(endverts[i] - v1)
+                    break
+        return nn
+    return 0
+
+
+def box_normals2(o: Sp, mut res: PV, mut idx: PI, n: V) -> Int:
+    """boxNormals2: a box face whose normal is within mjFACE_TOL of the collision normal."""
+    var ln = o.local(n)
+    ln = ln * (S(1) / sqrt(dot(ln, ln)))
+    for i in range(6):
+        var bn = V(0)
+        bn[i // 2] = S(1) if i % 2 == 0 else S(-1)
+        if dot(ln, bn) > FACE_TOL:
+            res[0] = rotn(o, bn)
+            idx[0] = i
+            return 1
+    return 0
+
+
+def box_normals(o: Sp, mut res: PV, mut idx: PI, dim: Int, v1: Int, v2: Int, v3: Int, dir: V) -> Int:
+    """boxNormals: the face normals a box vertex (3), edge (2) or face (1) lies on, from the corner bits of its vertices."""
+    if dim == 3:
+        var c = 0
+        var x = Int((v1 & 1) != 0 and (v2 & 1) != 0 and (v3 & 1) != 0) - Int((v1 & 1) == 0 and (v2 & 1) == 0 and (v3 & 1) == 0)
+        var y = Int((v1 & 2) != 0 and (v2 & 2) != 0 and (v3 & 2) != 0) - Int((v1 & 2) == 0 and (v2 & 2) == 0 and (v3 & 2) == 0)
+        var z = Int((v1 & 4) != 0 and (v2 & 4) != 0 and (v3 & 4) != 0) - Int((v1 & 4) == 0 and (v2 & 4) == 0 and (v3 & 4) == 0)
+        res[0] = rotn(o, V(S(x), S(y), S(z), 0))
+        var sgn = x + y + z
+        if x != 0:
+            idx[c] = 0; c += 1
+        if y != 0:
+            idx[c] = 2; c += 1
+        if z != 0:
+            idx[c] = 4; c += 1
+        if sgn == -1:
+            idx[0] += 1
+        return 1 if c == 1 else box_normals2(o, res, idx, dir)
+    if dim == 2:
+        var c = 0
+        var x = Int((v1 & 1) != 0 and (v2 & 1) != 0) - Int((v1 & 1) == 0 and (v2 & 1) == 0)
+        var y = Int((v1 & 2) != 0 and (v2 & 2) != 0) - Int((v1 & 2) == 0 and (v2 & 2) == 0)
+        var z = Int((v1 & 4) != 0 and (v2 & 4) != 0) - Int((v1 & 4) == 0 and (v2 & 4) == 0)
+        if x != 0:
+            res[0] = rotn(o, V(S(x), 0, 0, 0)); idx[c] = 0 if x > 0 else 1; c += 1
+        if y != 0:
+            res[c] = rotn(o, V(0, S(y), 0, 0)); idx[c] = 2 if y > 0 else 3; c += 1
+        if z != 0:
+            res[1] = rotn(o, V(0, 0, S(z), 0)); idx[c] = 4 if z > 0 else 5; c += 1  # the C writes res + 3 here
+        return 2 if c == 2 else box_normals2(o, res, idx, dir)
+    if dim == 1:
+        var x = S(1) if (v1 & 1) != 0 else S(-1)
+        var y = S(1) if (v1 & 2) != 0 else S(-1)
+        var z = S(1) if (v1 & 4) != 0 else S(-1)
+        res[0] = rotn(o, V(x, 0, 0, 0)); res[1] = rotn(o, V(0, y, 0, 0)); res[2] = rotn(o, V(0, 0, z, 0))
+        idx[0] = 0 if x > 0 else 1; idx[1] = 2 if y > 0 else 3; idx[2] = 4 if z > 0 else 5
+        return 3
+    return 0
+
+
+def box_edge_normals(o: Sp, mut res: PV, mut endverts: PV, dim: Int, v1: V, v2: V, v1i: Int) -> Int:
+    """boxEdgeNormals: an edge's direction (dim 2), or the three edges out of a corner (dim 1)."""
+    if dim == 2:
+        endverts[0] = v2
+        res[0] = normalize3(v2 - v1)
+        return 1
+    if dim == 1:
+        var x = o.size[0] if (v1i & 1) != 0 else -o.size[0]
+        var y = o.size[1] if (v1i & 2) != 0 else -o.size[1]
+        var z = o.size[2] if (v1i & 4) != 0 else -o.size[2]
+        endverts[0] = o.world(V(-x, y, z, 0)); res[0] = normalize3(endverts[0] - v1)
+        endverts[1] = o.world(V(x, -y, z, 0)); res[1] = normalize3(endverts[1] - v1)
+        endverts[2] = o.world(V(x, y, -z, 0)); res[2] = normalize3(endverts[2] - v1)
+        return 3
+    return 0
+
+
+def box_face(o: Sp, mut res: PV, idx: Int) -> Int:
+    """boxFace: the 4 corners of box face idx (right, left, top, bottom, front, back), the C's order."""
+    var s = o.size
+    var c = Array[V, 4](fill=V(0))
+    if idx == 0:
+        c[0] = V(s[0], s[1], s[2], 0); c[1] = V(s[0], s[1], -s[2], 0); c[2] = V(s[0], -s[1], -s[2], 0); c[3] = V(s[0], -s[1], s[2], 0)
+    elif idx == 1:
+        c[0] = V(-s[0], s[1], -s[2], 0); c[1] = V(-s[0], s[1], s[2], 0); c[2] = V(-s[0], -s[1], s[2], 0); c[3] = V(-s[0], -s[1], -s[2], 0)
+    elif idx == 2:
+        c[0] = V(-s[0], s[1], -s[2], 0); c[1] = V(s[0], s[1], -s[2], 0); c[2] = V(s[0], s[1], s[2], 0); c[3] = V(-s[0], s[1], s[2], 0)
+    elif idx == 3:
+        c[0] = V(-s[0], -s[1], s[2], 0); c[1] = V(s[0], -s[1], s[2], 0); c[2] = V(s[0], -s[1], -s[2], 0); c[3] = V(-s[0], -s[1], -s[2], 0)
+    elif idx == 4:
+        c[0] = V(-s[0], s[1], s[2], 0); c[1] = V(s[0], s[1], s[2], 0); c[2] = V(s[0], -s[1], s[2], 0); c[3] = V(-s[0], -s[1], s[2], 0)
+    elif idx == 5:
+        c[0] = V(s[0], s[1], -s[2], 0); c[1] = V(-s[0], s[1], -s[2], 0); c[2] = V(-s[0], -s[1], -s[2], 0); c[3] = V(s[0], -s[1], -s[2], 0)
+    else:
+        return 0
+    for i in range(4):
+        res[i] = o.world(c[i])
+    return 4
+
+
+def mesh_face(o: Sp, mut res: PV, idx: Int) -> Int:
+    """meshFace: polygon idx's vertices in reverse order, world frame."""
+    var adr = Int(o.ppoly[unsafe_offset=2 * idx]); var nv = Int(o.ppoly[unsafe_offset=2 * idx + 1])
+    var j = 0
+    for i in range(nv - 1, -1, -1):
+        res[j] = hvert(o, Int(o.pvert[unsafe_offset=adr + i]))
+        j += 1
+    return nv
+
+
+def aligned_faces(v: PV, nv: Int, w: PV, nw: Int) -> Array[Int, 3]:
+    """alignedFaces: two normals facing each other within mjFACE_TOL; [found, i, j]."""
+    var r = Array[Int, 3](fill=0)
+    for i in range(nv):
+        for j in range(nw):
+            if dot(v[i], w[j]) < -FACE_TOL:
+                r[0] = 1; r[1] = i; r[2] = j
+                return r^
+    return r^
+
+
+def aligned_face_edge(edge: PV, nedge: Int, face: PV, nface: Int) -> Array[Int, 3]:
+    """alignedFaceEdge: an edge direction perpendicular to a face normal within mjEDGE_TOL; [found, edge j, face i]."""
+    var r = Array[Int, 3](fill=0)
+    for i in range(nface):
+        for j in range(nedge):
+            if abs(dot(edge[j], face[i])) < EDGE_TOL:
+                r[0] = 1; r[1] = j; r[2] = i
+                return r^
+    return r^
+
+
+def multicontact(pt: Polytope, fi: Int, mut st: Status, o1: Sp, o2: Sp):
+    """multicontact (engine_collision_gjk.c:2058): EPA's final face gives each geom's touching feature (vertex, edge or face by
+    the support indices), their face normals are matched (face-face; else an edge of the lower-dimensional side against a face of
+    the other), the matching polygons recovered and one clipped by the other along the collision direction."""
+    if (o1.kind == MESH and o1.npoly == 0) or (o2.kind == MESH and o2.npoly == 0):
+        return
+    var f = pt.faces[fi].copy()
+    var va = pt.verts[f.a].copy(); var vb = pt.verts[f.b].copy(); var vc = pt.verts[f.c].copy()
+    var i1 = Array[Int, 3](fill=0); var i2 = Array[Int, 3](fill=0)
+    var p1 = Array[V, 3](fill=V(0)); var p2 = Array[V, 3](fill=V(0))
+    i1[0] = va.index1; i1[1] = vb.index1; i1[2] = vc.index1
+    i2[0] = va.index2; i2[1] = vb.index2; i2[2] = vc.index2
+    p1[0] = va.vert1; p1[1] = vb.vert1; p1[2] = vc.vert1
+    p2[0] = va.vert2; p2[1] = vb.vert2; p2[2] = vc.vert2
+    var nface1 = simplex_dim(i1, p1)
+    var nface2 = simplex_dim(i2, p2)
+    var n1 = PV(fill=V(0)); var n2 = PV(fill=V(0))
+    var idx1 = PI(fill=0); var idx2 = PI(fill=0)
+    var nn1 = 0; var nn2 = 0
+    var dir = st.x2 - st.x1
+    var dir_neg = st.x1 - st.x2
+    if o1.kind == BOX:
+        nn1 = box_normals(o1, n1, idx1, nface1, i1[0], i1[1], i1[2], dir_neg)
+    elif o1.kind == MESH:
+        nn1 = mesh_normals(o1, n1, idx1, nface1, i1[0], i1[1], i1[2])
+    if o2.kind == BOX:
+        nn2 = box_normals(o2, n2, idx2, nface2, i2[0], i2[1], i2[2], dir)
+    elif o2.kind == MESH:
+        nn2 = mesh_normals(o2, n2, idx2, nface2, i2[0], i2[1], i2[2])
+    var endverts = PV(fill=V(0))
+    var edgecon1 = False; var edgecon2 = False
+    var al = aligned_faces(n1, nn1, n2, nn2)
+    var ri = al[1]; var rj = al[2]
+    if al[0] == 0:
+        if nface1 < 3 and nface1 <= nface2:
+            nn1 = 0
+            if o1.kind == BOX:
+                nn1 = box_edge_normals(o1, n1, endverts, nface1, p1[0], p1[1], i1[0])
+            elif o1.kind == MESH:
+                nn1 = mesh_edge_normals(o1, n1, endverts, nface1, p1[0], p1[1], i1[0])
+            var ae = aligned_face_edge(n1, nn1, n2, nn2)
+            if ae[0] == 0:
+                return
+            ri = ae[1]; rj = ae[2]
+            edgecon1 = True
+        elif nface2 < 3:
+            nn2 = 0
+            if o2.kind == BOX:
+                nn2 = box_edge_normals(o2, n2, endverts, nface2, p2[0], p2[1], i2[0])
+            elif o2.kind == MESH:
+                nn2 = mesh_edge_normals(o2, n2, endverts, nface2, p2[0], p2[1], i2[0])
+            var ae = aligned_face_edge(n2, nn2, n1, nn1)
+            if ae[0] == 0:
+                return
+            ri = ae[1]; rj = ae[2]
+            edgecon2 = True
+        else:
+            return
+    var face1 = PV(fill=V(0)); var face2 = PV(fill=V(0))
+    if edgecon1:
+        face1[0] = va.vert1
+        face1[1] = endverts[ri]
+        nface1 = 2
+    else:
+        var ind = idx1[rj] if edgecon2 else idx1[ri]
+        if o1.kind == BOX:
+            nface1 = box_face(o1, face1, ind)
+        elif o1.kind == MESH:
+            nface1 = mesh_face(o1, face1, ind)
+    if edgecon2:
+        face2[0] = va.vert2
+        face2[1] = endverts[ri]
+        nface2 = 2
+    else:
+        if o2.kind == BOX:
+            nface2 = box_face(o2, face2, idx2[rj])
+        elif o2.kind == MESH:
+            nface2 = mesh_face(o2, face2, idx2[rj])
+    if edgecon1:
+        polygon_clip(st, face2, nface2, face1, nface1, n2[rj], n2[rj] * norm(dir))
+        return
+    if edgecon2:
+        polygon_clip(st, face1, nface1, face2, nface2, n1[rj], n1[rj] * (-norm(dir)))
+        return
+    polygon_clip(st, face1, nface1, face2, nface2, n1[ri], n2[rj] * norm(dir))
+
+
+def simplex_dim(mut vi: Array[Int, 3], mut v: Array[V, 3]) -> Int:
+    """simplexDim: 1, 2 or 3 distinct support indices among the face's three; a repeated first pair moves the third up."""
+    if vi[0] != vi[1]:
+        return 2 if (vi[2] == vi[0] or vi[2] == vi[1]) else 3
+    if vi[0] != vi[2]:
+        vi[1] = vi[2]
+        v[1] = v[2]
+        return 2
+    return 1
 
 
 # ---------------------------------------- heightfield (engine_collision_convex.c:1100) ------------------------

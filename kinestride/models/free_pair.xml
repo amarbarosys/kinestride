@@ -1,0 +1,25 @@
+<mujoco model="free_pair">
+  <!-- check.sh freefree: two free bodies 2 m from the world origin (two floating origins), touching through a sphere-sphere pair
+       (radii 0.08 and 0.075, centres 0.145 apart: 0.01 overlap) and a mesh-mesh pair (A's octahedron vertex 0.005 into B's cube
+       face, CONVEX=1, margin 0.01). No floor: the pairs between the two bodies are the only contacts. -->
+  <option timestep="0.002" noslip_iterations="0" tolerance="0"/>
+  <asset>
+    <mesh name="oct" vertex="0.1 0 0  -0.1 0 0  0 0.1 0  0 -0.1 0  0 0 0.1  0 0 -0.1"/>
+    <mesh name="cube" vertex="-0.05 -0.05 -0.05  0.05 -0.05 -0.05  -0.05 0.05 -0.05  0.05 0.05 -0.05  -0.05 -0.05 0.05  0.05 -0.05 0.05  -0.05 0.05 0.05  0.05 0.05 0.05"/>
+  </asset>
+  <default><geom contype="0" conaffinity="0" density="500"/></default>
+  <worldbody>
+    <body name="A" pos="2 0 0.5"><freejoint/>
+      <geom name="sa" type="sphere" size="0.08"/>
+      <geom name="ma" type="mesh" mesh="oct" pos="0 0.25 0"/>
+    </body>
+    <body name="B" pos="2.145 0 0.5"><freejoint/>
+      <geom name="sb" type="sphere" size="0.075" pos="0 0 0"/>
+      <geom name="mb" type="mesh" mesh="cube" pos="-0.005 0.25 0"/>
+    </body>
+  </worldbody>
+  <contact>
+    <pair geom1="sa" geom2="sb" margin="0.01"/>
+    <pair geom1="ma" geom2="mb" margin="0.01"/>
+  </contact>
+</mujoco>
