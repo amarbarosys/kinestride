@@ -11,7 +11,7 @@ become compile-time constants, so a fly, a spider or a game character each compi
 A body built in Blender gets here through the blender-mjcf add-on (parented meshes become bodies, named Empties
 become joints; armatures, masses and actuators are not exported, so those are added to the XML by hand).
 Export refuses what the engine cannot simulate instead of dropping it: flex,
-flex equalities, coupling across two trees outside Newton + pyramidal + Euler.
+flex equalities, coupling across two trees outside Newton + Euler (equalities and tendons across trees: pyramidal only).
 
 | area | ported and checked |
 |---|---|
