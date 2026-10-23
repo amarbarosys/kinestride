@@ -1,0 +1,24 @@
+<mujoco model="clip_test">
+  <!-- check.sh meshmesh0: margin-0 box-mesh and mesh-mesh pairs (mjc_Convex maxContacts 4: multicontact's polygon clipping).
+       Free bodies 2 m from the origin, no floor: a cube mesh on a cube mesh (face-face), a box on a cube mesh (box face on mesh
+       face), an octahedron lying edge-down on a cube mesh (edge-face); each 1 mm into the other at qpos0. model.clip_states. -->
+  <option timestep="0.002" noslip_iterations="0" tolerance="0"/>
+  <asset>
+    <mesh name="cube" vertex="-0.05 -0.05 -0.05  0.05 -0.05 -0.05  -0.05 0.05 -0.05  0.05 0.05 -0.05  -0.05 -0.05 0.05  0.05 -0.05 0.05  -0.05 0.05 0.05  0.05 0.05 0.05"/>
+    <mesh name="oct" vertex="0.05 0 0  -0.05 0 0  0 0.05 0  0 -0.05 0  0 0 0.05  0 0 -0.05"/>
+  </asset>
+  <default><geom contype="0" conaffinity="0" density="500"/></default>
+  <worldbody>
+    <body name="A" pos="2 0 0.5"><freejoint/><geom name="a" type="mesh" mesh="cube"/></body>
+    <body name="B" pos="2 0.01 0.599"><freejoint/><geom name="b" type="mesh" mesh="cube"/></body>
+    <body name="C" pos="2.5 0 0.5"><freejoint/><geom name="c" type="mesh" mesh="cube"/></body>
+    <body name="D" pos="2.51 0 0.599"><freejoint/><geom name="d" type="box" size="0.05 0.05 0.05"/></body>
+    <body name="E" pos="3 0 0.5"><freejoint/><geom name="e" type="mesh" mesh="cube"/></body>
+    <body name="F" pos="3 0 0.5844" quat="0.9238795 0 0.3826834 0"><freejoint/><geom name="f" type="mesh" mesh="oct"/></body>
+  </worldbody>
+  <contact>
+    <pair geom1="b" geom2="a"/>
+    <pair geom1="d" geom2="c"/>
+    <pair geom1="f" geom2="e"/>
+  </contact>
+</mujoco>

@@ -116,7 +116,12 @@ comptime NEQJ = get_defined_int["NEQJ", 0]()  # Jacobian entries: rows x chain l
 comptime EQH = 13  # the 13th: MuJoCo eq_active0 (1 for a limit row)
 comptime EQF = 31
 comptime NMM = get_defined_int["NMM", 0]() == 1  # a mesh-mesh pair exists: per pair geom1's hull vertex and first-edge offsets after the convex block
-comptime CEQH = NI2 + ((6 if NMM else 4) * NCP if NCV > 0 else 0)  # the convex block (kind, two shape kinds, condim per pair) sits between the tendon and equality blocks
+comptime PCLIP = get_defined_int["PCLIP", 0]() == 1  # margin-0 box-mesh / mesh-mesh pairs: the hulls' polygons (model.py poly_block) end the convex block
+comptime NPOLY = get_defined_int["NPOLY", 0]()
+comptime NPMAP = get_defined_int["NPMAP", 0]()
+comptime NPVERT = get_defined_int["NPVERT", 0]()
+comptime CPMV = NI2 + ((6 if NMM else 4) * NCP if NCV > 0 else 0)  # PCLIP: per hull vertex polygon adr and count, polygon ids, per polygon vertex adr and count, vertices
+comptime CEQH = CPMV + (2 * NHV + NPMAP + 2 * NPOLY + NPVERT if PCLIP else 0)  # the convex block (kind, two shape kinds, condim per pair) sits between the tendon and equality blocks
 comptime CEQC = CEQH + EQH * NEQ
 comptime CEQM = CEQC + NEQCH
 # mocap bodies (model.py mocap_block, after the equality block): body_mocapid per body; each animal's mocap pose (pos 3,
@@ -192,7 +197,8 @@ comptime TNF = FLF + (5 + 15 * NFLROW if NFLUID else 0)  # tendon floats: wrap c
 comptime CSPF = TNF + NWRAP + 4 * NTEN
 comptime NFL2 = CSPF + (11 * NWRAP if SPATIAL else 0)
 comptime CCV = NFL2  # NCV: opt.ccd_tolerance, heightfield size 0-3 and origin z (HFEXACT), then per pair geom1's size (3), then per pair geom2's size (3)
-comptime CEQF = NFL2 + (6 + 6 * NCP if NCV > 0 else 0)  # per equality: anchors 0 and 1, quaternions 0 and 1, torquescale, solref, solimp, invweight 2, joint data 5, qpos0 2
+comptime CPN = NFL2 + (6 + 6 * NCP if NCV > 0 else 0)  # PCLIP: per polygon its normal
+comptime CEQF = CPN + (3 * NPOLY if PCLIP else 0)  # per equality: anchors 0 and 1, quaternions 0 and 1, torquescale, solref, solimp, invweight 2, joint data 5, qpos0 2
 comptime CGF = CEQF + EQF * NEQ
 comptime GAME = get_defined_int["GAME", 0]() == 1 and STAGE >= 7  # game layer per step (~/Projects/science/fly-connectome/docs/plans/GAME_LAYER.md): energy, health, stamina, dead
 comptime SLEEP = get_defined_int["SLEEP", 0]() == 1  # mj_sleep (model.py sleep_block): opt.sleep_tolerance, then dof_length per dof (the velocity weights)
@@ -1614,6 +1620,17 @@ def hfield_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, q2:
         count += 1
 
 
+@always_inline
+def polys(mi: TI, mf: TF, mut s: Sp, voff: Int):
+    """A mesh shape's polygon pointers (PCLIP), its hull starting at hull vertex voff."""
+    s.pmv = mi.ptr.unsafe_offset(CPMV + 2 * voff)
+    s.pmap = mi.ptr.unsafe_offset(CPMV + 2 * NHV)
+    s.ppoly = mi.ptr.unsafe_offset(CPMV + 2 * NHV + NPMAP)
+    s.pvert = mi.ptr.unsafe_offset(CPMV + 2 * NHV + NPMAP + 2 * NPOLY)
+    s.pnorm = mf.ptr.unsafe_offset(CPN)
+    s.npoly = NPOLY
+
+
 def convex_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, kind: Int, q1: Q4, pos1_: V3, q2: Q4, pos2: V3, b: Int):
     """Port of mjc_Convex for a box-mesh (kind 2, up to 5 contacts) or ellipsoid-mesh (kind 1, one) pair, ported in convex.mojo (GJK +
     EPA, perturbation search); the contacts take the shared mj_instantiateContact tail with their own frame. A world geom1
@@ -1667,6 +1684,12 @@ def convex_pair(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int, p: Int, kin
             s2.pos = pos2.cast[CT]()
             var c = rows3(q2)
             s2.r0 = c[0].cast[CT](); s2.r1 = c[1].cast[CT](); s2.r2 = c[2].cast[CT]()
+            comptime if PCLIP:  # the meshes' polygons for multicontact (margin 0)
+                if s2.kind == MESH:
+                    polys(mi, mf, s2, voff)
+                comptime if NMM:
+                    if s1.kind == MESH:
+                        polys(mi, mf, s1, Int(mi[CMM + 2 * p]))
             cs = collide(s1, s2, margin.cast[CT](), mf[CCV].cast[CT](), min(rb1, rb2).cast[CT]())
         var com = V3(get(res, f, OSC + 3 * Int(mi[ROOT + b])), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 1), get(res, f, OSC + 3 * Int(mi[ROOT + b]) + 2), 0)
         var com1 = side_com(mi, qpos, res, f, g1, b, com)

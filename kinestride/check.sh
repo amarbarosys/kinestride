@@ -728,6 +728,25 @@ if [ "$stage" = elliptic_int ]; then  # the elliptic cone under implicitfast and
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all elliptic_int checks"; exit 0
 fi
+if [ "$stage" = meshmesh0 ]; then  # margin-0 box-mesh and mesh-mesh pairs: mjc_Convex's maxContacts 4, multicontact's polygon clipping
+  # (engine_collision_gjk.c:1457-2205, convex.mojo) on models/clip_test.xml (cube mesh on cube mesh, box on cube mesh, octahedron edge
+  # on cube mesh; free bodies, no floor), model.clip_states: half the states within 3e-4 rad of face-aligned (MuJoCo: 10 contacts,
+  # 4 + 4 + 2), half tilted 0.05 rad (3 to 5); pyramidal and elliptic, 1e-5 and the floors.
+  S=kinestride/convex.mojo; CT=kinestride/models/clip_test.xml; mkdir -p $X/mm0
+  SP=$($M -c "from kinestride.model import clip_states; print(clip_states('$CT', '$X/mm0/states.npz'))")
+  for c in 0 1; do
+    ENGINE_OPT=cone=$c STATES=$SP CONVEX=1 STONES=1 $M -m kinestride.model check $CT $X/mm0/c$c contact 64 || { echo "FAIL meshmesh0 cone $c"; fail=$((fail+1)); }
+  done
+  # the gate must fail with: the clipping planes' orientation flipped, the contact offset along the face normal reversed, the face
+  # alignment test never met (single EPA contacts)
+  for mut in 's/        pn\[i\] = cross(v2 - v1, n)/        pn[i] = cross(n, v2 - v1)/' \
+             's/    polygon_clip(st, face1, nface1, face2, nface2, n1\[ri\], n2\[rj\] \* norm(dir))/    polygon_clip(st, face1, nface1, face2, nface2, n1[ri], n2[rj] * (-norm(dir)))/' \
+             's/            if dot(v\[i\], w\[j\]) < -FACE_TOL:/            if dot(v[i], w[j]) < -2 * FACE_TOL:/'; do
+    STATES=$SP CONVEX=1 STONES=1 ~/iTools/bin/mutant-check $S "$mut" -- $M -m kinestride.model check $CT $X/mutant contact 64 || fail=$((fail+1))
+  done
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all meshmesh0 checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's

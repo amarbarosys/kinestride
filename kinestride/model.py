@@ -628,9 +628,6 @@ def feet(m, regex, couple=(), hrows=None, convex=False, hfexact=False, hull_out=
     sel, drop = pairs(m, regex, convex)
     if drop:
         print(f'export: {sum(drop.values())} pairs of unported kinds NOT exported: {dict(drop)}')
-    if convex and any(m.geom_type[pair_geoms(m, i)[0]] in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_MESH) and m.geom_type[pair_geoms(m, i)[1]] == mujoco.mjtGeom.mjGEOM_MESH
-                      and m.pair_margin[i] + m.pair_gap[i] <= 0 for i in sel):  # mjc_Convex maxContacts: margin 0 takes native polygon clipping
-        raise SystemExit('FAIL export: box-mesh and mesh-mesh pairs need margin > 0 (MuJoCo clips polygons at margin 0; not ported)')
     if any(m.pair_dim[i] not in (1, 3, 4, 6) or m.pair_solimp[i][4] != int(m.pair_solimp[i][4]) for i in sel):
         raise SystemExit('FAIL export: only condim 1, 3, 4 and 6 contacts with a whole solimp power are ported')
     dimx = max([3] + [int(m.pair_dim[i]) for i in sel])
@@ -1196,6 +1193,32 @@ def with_pair_animals(mjcf, out, states_out, count=64, seed=0):
     return str(out)
 
 
+def clip_states(mjcf, out, count=64, seed=0):
+    """States for models/clip_test.xml (check.sh meshmesh0): every free body near qpos0 (position +-1 mm across, +-0.3 mm along z),
+    rotated by a random axis: the first half of the states by up to 3e-4 rad (faces stay within mjFACE_TOL, 1.6e-3 rad: the clipped
+    multi-contact), the rest by up to 0.05 rad (one EPA contact); velocities +-0.1 m/s and +-1 rad/s. qpos, qvel to `out`."""
+    m = mujoco.MjModel.from_xml_path(str(mjcf))
+    rng = np.random.default_rng(seed)
+    q, v = np.tile(m.qpos0, (count, 1)), np.zeros((count, m.nv))
+    for j in range(m.njnt):
+        a, dv = m.jnt_qposadr[j], m.jnt_dofadr[j]
+        q[:, a:a + 2] += rng.uniform(-1e-3, 1e-3, (count, 2))
+        q[:, a + 2] += rng.uniform(-3e-4, 3e-4, count)
+        for n in range(count):
+            ax = rng.normal(size=3)
+            ax /= np.linalg.norm(ax)
+            ang = rng.uniform(0, 3e-4 if n < count // 2 else 0.05)
+            dq = np.r_[np.cos(ang / 2), np.sin(ang / 2) * ax]
+            res = np.zeros(4)
+            mujoco.mju_mulQuat(res, dq, q[n, a + 3:a + 7])
+            q[n, a + 3:a + 7] = res
+        v[:, dv:dv + 3] = rng.uniform(-0.1, 0.1, (count, 3))
+        v[:, dv + 3:dv + 6] = rng.uniform(-1, 1, (count, 3))
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    np.savez(out, qpos=q, qvel=v)
+    return str(out)
+
+
 def with_sleep(mjcf, out, tolerance):
     """mjcf with sleeping enabled (opt.enableflags sleep, sleep_tolerance): the gate body of check.sh sleep. Mesh paths made absolute;
     written to `out`; returns the path."""
@@ -1626,7 +1649,42 @@ def convex_block(m, regex, convex=True, hfexact=False, hulls=None):
     if any(mm):
         sizes['NMM'] = 1
     hull1 = [c for i, k in zip(sel, mm) for c in (hulls[m.geom_dataid[pair_geoms(m, i)[0]]] if k else (0, 0))] if any(mm) else []
-    return np.array(kind + [c for ab in shapes for c in ab] + [int(m.pair_dim[i]) for i in sel] + hull1), np.concatenate([head, *size, *size2]), sizes
+    pi, pf = poly_block(m, sel, hulls, sizes)
+    return np.array(kind + [c for ab in shapes for c in ab] + [int(m.pair_dim[i]) for i in sel] + hull1 + pi), np.concatenate([head, *size, *size2, pf]), sizes
+
+
+def poly_block(m, sel, hulls, sizes):
+    """Margin-0 box-mesh and mesh-mesh pairs (mjc_Convex maxContacts 4: multicontact's polygon clipping, convex.mojo) need each
+    hull's polygons: ints per hull vertex (the hull table's order) the adr and count of its polygons in the polygon-id list, that
+    list (absolute polygon ids), per polygon the adr and count of its vertices, those vertices (hull-local); floats per polygon
+    its normal (geom frame). MuJoCo indexes them by mesh vertex; here by hull vertex. Empty unless such a pair exists (-DPCLIP)."""
+    G = mujoco.mjtGeom
+    if not any(m.pair_margin[i] + m.pair_gap[i] <= 0 and m.geom_type[pair_geoms(m, i)[1]] == G.mjGEOM_MESH
+               and m.geom_type[pair_geoms(m, i)[0]] in (G.mjGEOM_MESH, G.mjGEOM_BOX) for i in sel):
+        return [], np.zeros(0)
+    pmv, pmap, ppoly, pvert, pnorm = [], [], [], [], []
+    for mesh in sorted(hulls, key=lambda k: hulls[k][0]):
+        ga = m.mesh_graphadr[mesh]
+        nv = m.mesh_graph[ga]
+        gid = list(m.mesh_graph[ga + 2 + nv:ga + 2 + 2 * nv])
+        local = {g: k for k, g in enumerate(gid)}
+        pa, pn, va = m.mesh_polyadr[mesh], m.mesh_polynum[mesh], m.mesh_vertadr[mesh]
+        base = len(ppoly) // 2
+        for k in range(pn):
+            vs = [int(x) for x in m.mesh_polyvert[m.mesh_polyvertadr[pa + k]:m.mesh_polyvertadr[pa + k] + m.mesh_polyvertnum[pa + k]]]
+            if len(vs) > 16 or any(v not in local for v in vs):
+                raise SystemExit(f'FAIL export: mesh {mesh} polygon {k} has {len(vs)} vertices or one off the hull (multicontact takes 16, hull vertices)')
+            ppoly += [len(pvert), len(vs)]
+            pvert += [local[v] for v in vs]
+            pnorm += list(m.mesh_polynormal[pa + k])
+        for g in gid:
+            a, n = m.mesh_polymapadr[va + g], m.mesh_polymapnum[va + g]
+            if n > 16:
+                raise SystemExit(f'FAIL export: mesh {mesh} vertex {g} lies on {n} polygons (multicontact takes 16)')
+            pmv += [len(pmap), int(n)]
+            pmap += [base + int(x) for x in m.mesh_polymap[a:a + n]]
+    sizes |= {'PCLIP': 1, 'NPOLY': len(ppoly) // 2, 'NPMAP': len(pmap), 'NPVERT': len(pvert)}
+    return pmv + pmap + ppoly + pvert, np.array(pnorm)
 
 
 def cube_colour(m, tex, v):
