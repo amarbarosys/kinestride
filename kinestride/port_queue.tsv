@@ -16,4 +16,4 @@ pgs-full	solPGS	engine_solver.c	pgs_full	done 07dea68	LANE: PGS with elliptic co
 cg-full	mj_solCG	engine_solver.c	cg_full	done 6408155	LANE: CG with elliptic cones, convex pairs, equality and friction-loss rows
 elliptic-integrators	mj_RungeKutta	engine_forward.c	elliptic_int	done 760adbf	LANE: elliptic cone under RK4 and implicitfast (mostly a gate)
 meshmesh-margin0	mjc_Convex	engine_collision_convex.c	meshmesh0	done 5f70c2f	LANE: margin 0 mesh-mesh (MuJoCo's native polygon clipping)
-flex	mj_flex	engine_core_smooth.c	flex	open	LANE: plan only, docs/plans/FLEX.md, no code (XL, 3000+ LOC)
+flex	mj_flex	engine_core_smooth.c	flex	plan docs/plans/FLEX.md	LANE: plan only, docs/plans/FLEX.md, no code (XL, 3000+ LOC)
