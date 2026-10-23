@@ -710,6 +710,24 @@ if [ "$stage" = cg_full ]; then  # CG (mj_solCG) over every row kind: Newton's u
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all cg_full checks"; exit 0
 fi
+if [ "$stage" = elliptic_int ]; then  # the elliptic cone under implicitfast and RK4 (model.elliptic: the fly, noslip 0, MuJoCo to tolerance 0),
+  # on standing states from an Euler rollout of the same model: implicitfast with kv 0.01 (the integrator stage's servos), RK4 at
+  # dt 1e-7 (the rk4 stage's: stiff contacts flip MuJoCo's own ncon between its four passes above that). RK4 within 1e-5 and the
+  # floors; implicitfast at REL 1e-4: the card measured qfrc_constraint 6.7e-5 and qacc_euler 3.8e-5 (the cone's 15x-floor bars 6.4e-5,
+  # 3.7e-5), the CPU engine 2.1e-5 on the same states.
+  S=kinestride/smooth.mojo; I=$X/ei; mkdir -p $I
+  E0=$($M -c "from kinestride.model import elliptic; print(elliptic('${BODY:-.work/assets/fly/body.xml}', 0))")
+  A=$(env -u ENGINE_OPT $M -m kinestride.model airborne $E0 $I/air 0 | tail -1)
+  ENGINE_OPT=integrator=3,kv=0.01 STATES=$A REL=1e-4 $M -m kinestride.model check $E0 $I/impl actuated 64 || { echo "FAIL elliptic_int implicitfast"; fail=$((fail+1)); }
+  ENGINE_OPT=integrator=1,dt=1e-7 STATES=$A $M -m kinestride.model check $E0 $I/rk4 actuated 64 || { echo "FAIL elliptic_int rk4"; fail=$((fail+1)); }
+  # the gate must fail with: the cone's tangential force sign (RK4), Dm without (1 + mu^2) (implicitfast)
+  ENGINE_OPT=integrator=1,dt=1e-7 STATES=$A ~/iTools/bin/mutant-check $S 's/force = V3(f0, -f0 \/ T \* U\[1\] \* fr\[1\], -f0 \/ T \* U\[2\] \* fr\[2\], 0)/force = V3(f0, f0 \/ T * U[1] * fr[1], f0 \/ T * U[2] * fr[2], 0)/' -- \
+    $M -m kinestride.model check $E0 $I/mutant actuated 64 || fail=$((fail+1))
+  ENGINE_OPT=integrator=3,kv=0.01 STATES=$A REL=1e-4 ~/iTools/bin/mutant-check $S 's/(mu \* mu \* (1 + mu \* mu))/(mu * mu)/' -- \
+    $M -m kinestride.model check $E0 $I/mutant actuated 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all elliptic_int checks"; exit 0
+fi
 if [ "$stage" = joint_limit ]; then  # hinge/slide joint limit rows (mj_instantiateLimit) on the equality block, unilateral in Newton: the fly and
   # the spider with every hinge/slide limited to the 35..65 % quantiles of its qpos over nearby states (model.with_joint_limits), contacts
   # off, solref_limit 0.1 and tolerance 0, vs mj_step (REL=2e-3 as tendon_limit's animals: the fly's light rotational dofs). The shipped fly's

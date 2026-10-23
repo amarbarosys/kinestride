@@ -421,8 +421,6 @@ def load(mjcf):
             or m.dof_dampingpoly.any() or m.jnt_stiffnesspoly.any() or m.opt.disableflags & ~int(mujoco.mjtDisableBit.mjDSBL_MULTICCD)):  # multiccd off only changes contact counts (with_auto_pairs)
         raise SystemExit('FAIL export: only Euler/implicitfast, linear joint springs and dof dampers are ported (no flex, '
                          'actuator damping, polynomial springs or dampers, disable flags)')
-    if m.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC and m.opt.integrator != mujoco.mjtIntegrator.mjINT_EULER:
-        raise SystemExit('FAIL export: the elliptic cone is gated with the Euler integrator only (check.sh cone), not RK4 or implicitfast')
     if m.tendon_stiffnesspoly.any() or m.tendon_dampingpoly.any() or m.tendon_actfrclimited.any():
         raise SystemExit('FAIL export: only tendons with linear spring and damper are ported (limits, friction loss: eq_rows)')
     return m
@@ -746,7 +744,7 @@ def eq_rows(m, limits=True):
         return c
     if m.neq and (m.opt.cone != mujoco.mjtCone.mjCONE_PYRAMIDAL or m.opt.integrator):
         raise SystemExit('FAIL export: equality constraints are gated with Newton, PGS or CG and the pyramidal cone only '
-                         'and the Euler integrator only (check.sh equality, equality_contact); CG, PGS, elliptic cones and implicit integrators with equalities are untested')
+                         'and the Euler integrator only (check.sh equality, equality_contact, pgs_full, cg_full); elliptic cones and implicit integrators with equalities are untested')
     W = mujoco.mjtWrap
 
     def ten_union(t):  # dofs tendon t moves: its joints' dofs, its sites' and wrap geoms' body chains
