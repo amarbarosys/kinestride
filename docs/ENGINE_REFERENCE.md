@@ -41,6 +41,7 @@ kinestride/bench.sh build MJCF [STAGE]; gpu-wait run ... -- kinestride/bench.sh 
 | + | equality constraints connect, weld, joint (always-active Newton rows, mj_Jdotv correction) | `equality` (alone), `equality_contact` (with an active sphere-sphere contact and noslip 5 in one solve) |
 | + | coupling across trees in one model (contact pairs, connect/weld/joint equalities, spatial and fixed tendons, tendon limits): each pair side's Jacobian about its own root, geom1 moved into geom2's tree frame; Newton, pyramidal, Euler only | `cross` |
 | + | mesh-mesh pairs (mjc_Convex at margin > 0: one GJK + EPA contact, then the perturbation search, up to 5), geom1's hull per pair (`-DNMM`); margin 0 is refused (MuJoCo's native polygon clipping is not ported); a model's every potential pair joins H's static pattern, so many cross pairs cost every step | `meshmesh` |
+| + | joint actuator force limits (jnt_actfrcrange clamp on qfrc_actuator after actuator gravcomp) | `actfrc` (fly, spider and `models/gravcomp_act.xml` via `model.with_actfrc`) |
 | + | body gravcomp (mj_gravcomp: -gravity mass gravcomp at xipos through the body's point Jacobian; per joint passive route or, with `actuatorgravcomp`, the actuator route) | `gravcomp` (fly and spider with gravcomp set via `model.with_gravcomp`, plus `models/gravcomp_act.xml` for the actuator route) |
 | + | spatial tendons (mj_tendon: site paths, pulley divisors, sphere and cylinder wraps with sidesite via mju_wrap incl. the inside wrap; ten_length, ten_velocity, dense ten_J; tendon spring, damper and servo through the moment row) | `sptendon` (fixture `models/tendon_spatial.xml` random and actuated states, fly and spider with three added spatial tendons via `model.with_spatial_tendons`) |
 | + | mocap bodies (mocap_pos/quat per animal in ctrl.bin rows NU..; kinematics; welded or connected to the animal) | `mocap` |
@@ -86,7 +87,9 @@ Gates use states near qpos0 (`model.nearby`; `EQSPREAD=far` for metre-sized viol
 
 Gravcomp (`body_gravcomp`, `model.gravcomp_block`, `gravcomp()` in smooth.mojo, comptime `GRAVCOMP`) is ported including `jnt_actgravcomp`: those joints' share goes to
 qfrc_actuator (engine_forward.c:770), which MuJoCo only does when the model has actuators (nu > 0; with nu = 0 the compensation of such joints is lost in MuJoCo too, and here).
-Export refuses gravcomp with joint actuator force limits (`jnt_actfrcrange` clamp not ported).
+Joint-level actuator force limits (`jnt_actfrcrange`, `model.actfrc_block`, comptime `NAFRC`) clamp qfrc_actuator at each limited joint's first dof after the actuator gravcomp
+(clampVec, engine_forward.c:788), as MuJoCo does only when nu > 0; `check.sh actfrc` (fly, spider and `models/gravcomp_act.xml` through `model.with_actfrc`: gravcomp on,
+ranges binding on both sides in every state, states from the unlimited model's rollouts; fly and spider contact-free, so their own contact float32 floors stay out of this gate; 5 mutants).
 
 Spatial tendons (`model.spatial()`, `spatial()` in smooth.mojo, comptime `SPATIAL`, appended right after the fixed-tendon arrays; with SPATIAL every tendon, fixed or spatial, takes
 its length and dense moment row from `spatial()` and tendon spring, damper and servos read those rows) are ported: site paths, pulleys, sphere and cylinder wraps with sidesites. The inside wrap
