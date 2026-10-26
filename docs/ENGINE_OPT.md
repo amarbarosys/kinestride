@@ -182,3 +182,10 @@ a measured candidate: the per-contact loops walk each animal's own pair list, an
 1.74 distinct pairs per step (3.21 in random order, 1.03 sorted; `tools/wave_coherence.py`). A wave-uniform union walk
 would cut those lines to 0.60x (0.42x random) with the same per-animal order. fp16/bf16 storage is out (gate 1e-5);
 LDS state is out at 65,536 (step 2 probe). Prereg with zero-code arms: `bench/LANE_UNION_PREREG.md`.
+
+**Step 2 run (2026-10-26, timing only).** Same 65,536 states, byte-identical results, only the lane order changed:
+bench order 79.43 ms, random (a crowd) 97.26 ms (+22.4 %), sorted by contact set 72.03 ms (-9.3 %). Newton iterations are
+equal in all three. So lane divergence costs time, and the wave-uniform contact walk qualifies for an implementation
+lane. Warm start (K = 1): iterations -26 %, time -1.9 %, not a lever. Phase split by time: kinematics through
+constraints 18.5 %, Newton start + first H 19.4 %, first gradient 2.4 %, Newton loop 36.2 %, noslip 17.9 %, Euler 5.7 %.
+Byte counters were not run (the counter recipe unbinds the iGPU, which drives a monitor). Detail: `bench/LANE_UNION_PREREG.md`.

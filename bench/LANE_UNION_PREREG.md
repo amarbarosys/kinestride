@@ -71,4 +71,38 @@ are appended below with the commit that produced them, misses included.
 
 ## Results
 
-(empty until the run)
+Run 2026-10-26, kinestride `a36d683` engine (no engine change), harness `tools/permute_bench.py`; GPU job
+`.work/bandwidth-ideas/run/time.sh` via gpu-wait, card1 `auto`, LACT Ultimate-AI (290 W). Warmup C 79.13 ms discarded.
+
+**Byte arms not run.** traffic.sh needs the iGPU (0000:18:00.0) unbound, and it drives the DP-3 monitor; Mario chose
+to skip. Every reads/writes band below is UNVERIFIED, so the falsifiers stated in bytes have no verdict.
+
+| quantity | band | measured | verdict |
+|---|---|---|---|
+| C ms (C1, C2) | | 79.54, 79.32 -> 79.43 | |
+| R / C ms | 0 % to +40 % | 97.10, 97.42 -> +22.4 % | hit |
+| S / C ms | 0 % to -20 % | 72.14, 71.92 -> -9.3 % | hit |
+| C, R, S Newton iterations | equal | 3.980 (max 9, 10.23 line-search evaluations) in all six runs | hit |
+| S, R `smooth.bin` un-permuted vs C | byte-identical | PASS, 7,576 rows x 65,536 animals each | hit |
+| W / C Newton iterations | -30 % to -60 % | 3.980 -> 2.930 = -26.4 % | **miss** (smaller than predicted) |
+| W ms (no band) | | 77.90 = -1.9 % (one run) | |
+| R / C, S / C, W / C reads | as frozen | not measured | UNVERIFIED |
+| P Newton loop share of reads | 10 % to 40 % | not measured; time share 36.2 % | UNVERIFIED |
+
+Phase split by time (one run each, same job; P6n0 = STOP 6 with noslip_iterations 0):
+
+| phase | ms | share of C |
+|---|---:|---:|
+| kinematics through constraints (P5) | 14.67 | 18.5 % |
+| Newton start + first Hessian (P9 - P5) | 15.38 | 19.4 % |
+| first gradient (P8 - P9) | 1.87 | 2.4 % |
+| Newton loop (P6n0 - P8) | 28.73 | 36.2 % |
+| noslip, 5 sweeps (P6 - P6n0) | 14.24 | 17.9 % |
+| Euler (C - P6) | 4.54 | 5.7 % |
+
+**Verdict.** Lane divergence is real and costs time: the same states, with the same per-animal work and byte-identical
+results, take 22.4 % longer in crowd order and 9.3 % less sorted. The adoption rule on time is met on both counts
+(S / C <= -5 %, R / C >= +10 %), so the union walk qualifies for an implementation lane. Its ship rule still asks for a
+traffic.sh run on C and R, which needs a counter pass with the session off DP-3, or a ms-only ship rule decided at
+review. Warm start missed its iteration band (-26 %) and moves time by -1.9 %: not a lever. Noslip (14.2 ms) costs as
+much as the Newton start, far above the static estimate.
