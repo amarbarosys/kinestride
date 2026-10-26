@@ -126,6 +126,39 @@ if [ "$stage" = bvh ]; then  # BVH -> canonical character + reference clip (bvh.
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all bvh checks"; exit 0
 fi
+if [ "$stage" = npclive ]; then  # npc-mind brains walking spider bodies (npc_live.mojo, docs/plans/BRAIN.md B4): builds here on
+  # the CPU, then ONE gpu-wait job runs only the binaries (brains and the gait kernel use the card; the engine steps on the host);
+  # tools/npclive_check.py reads what they wrote. Run WITHOUT an outer gpu-wait. NPC_MIND: an npc-mind checkout at a commit
+  # (default the pinned worktree), FCB: fly-connectome's agent/body_engine (spider_brain.gait)
+  T=$X/npclive; NPC=${NPC_MIND:-$HOME/Projects/NN-lanes/kinestride-pin/npc-mind}; FCB=${FCB:-$HOME/Projects/science/fly-connectome/agent/body_engine}
+  [ -f "$NPC/mind_gpu.mojo" ] && [ -f "$FCB/spider_brain.mojo" ] || { echo "FAIL npclive: npc-mind ($NPC) or fly-connectome ($FCB) missing"; exit 1; }
+  mkdir -p $T/inc; ln -sfn "$NPC/world.mojo" $T/inc/npc_world.mojo  # kinestride's own world.mojo takes the module name
+  [ -f $T/qpos.bin ] || $M tools/npc_bodies.py $T 8 > $T/export.log 2>&1 || { echo "FAIL npclive export: $T/export.log"; exit 1; }
+  ~/iTools/bin/mojo-cached build -O2 -I "$NPC" tools/npc_imitate.mojo -o $T/npc_imitate > $T/build-imitate.log 2>&1 || { echo "FAIL npclive build: $T/build-imitate.log"; exit 1; }
+  for m in 0 1 2; do
+    ~/iTools/bin/mojo-cached build $(cat $T/sizes.txt) -DFLIES=8 -DSTAGE=7 -DK=10 -DCPU=1 -DMUT=$m -I kinestride -I "$NPC" -I $T/inc -I "$FCB" \
+      kinestride/npc_live.mojo -o $T/npc_live$m > $T/build$m.log 2>&1 &
+  done
+  for m in 0 1 2; do wait -n || { echo "FAIL npclive build: $T/build*.log"; exit 1; }; done
+  [ "${BUILD_ONLY:-0}" = 1 ] && { echo "PASS npclive CPU builds"; exit 0; }
+  L=$T/npc_live0
+  cat > $T/run.sh <<EOF
+set -euo pipefail
+$T/npc_imitate 1 $T
+$L $T/ scripted grid 0 200 $T/sg.bin
+$L $T/ scripted fake 0 200 $T/sf.bin
+$L $T/ scripted calib 0 1 $T/cal.bin
+$L $T/ scripted body 0 20 $T/sb.bin
+$L $T/ base body 0 20 $T/bb1.bin
+$L $T/ base body 0 20 $T/bb2.bin
+$T/npc_live1 $T/ scripted body 0 5 $T/m1.bin > $T/m1.log
+$T/npc_live2 $T/ scripted body 0 5 $T/m2.bin > $T/m2.log
+EOF
+  /usr/bin/time -f card_job_%e_s gpu-wait run --shared --vram 2 --priority 90 --timeout 900 --label npclive -- bash $T/run.sh > $T/run.log 2>&1 \
+    || { echo "FAIL npclive run: $T/run.log"; exit 1; }
+  grep card_job $T/run.log
+  exec $M tools/npclive_check.py $T 8
+fi
 if [ "$stage" = track ] || [ "$stage" = dataset ]; then  # the tracking loop (track.mojo, K=4) vs the same loop in MuJoCo: track = CMU 10_01 on
   # 64 animals; dataset = 4 clips on 8 animals, half pushed (falls with the assist off). Run WITHOUT an outer gpu-wait: only the
   # engine binary takes the card (seconds); warm first with BUILD_ONLY=1 kinestride/check.sh $stage (its verdict ignored): binaries
