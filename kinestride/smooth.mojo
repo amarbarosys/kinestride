@@ -393,38 +393,6 @@ def has(res: TO, f: Int, mask: Int, i: Int) -> Bool:
 
 
 @always_inline
-def npairs(res: TO, f: Int) -> Int:
-    """Length of the pair walk: every pair id with UNION, else this animal's OPA list."""
-    comptime if UNION:
-        return NCP
-    return Int(get(res, f, OPA))
-
-
-@always_inline
-def pick(res: TO, f: Int, ip: Int) -> Int:
-    """Step ip of the pair walk: the pair id, or -1 when UNION visits a pair this animal lacks. Both walks are ascending."""
-    comptime if UNION:
-        return ip if has(res, f, OUPM, ip) else -1
-    return Int(get(res, f, OPA + 1 + ip))
-
-
-@always_inline
-def nslots(res: TO, f: Int) -> Int:
-    """Length of the slot walk: every slot id with UNION, else this animal's OACT list."""
-    comptime if UNION:
-        return NSLOT
-    return Int(get(res, f, OACT))
-
-
-@always_inline
-def slot(res: TO, f: Int, i: Int) -> Int:
-    """Step i of the slot walk: the slot id, or -1 when UNION visits a slot this animal lacks. Both walks are ascending."""
-    comptime if UNION:
-        return i if has(res, f, OUSM, i) else -1
-    return Int(get(res, f, OACT + 1 + i))
-
-
-@always_inline
 def col(q: Q4, k: Int) -> V3:
     """Column k of the rotation matrix of q (MuJoCo xmat[k], xmat[k+3], xmat[k+6])."""
     return rot(q, basis(k))
@@ -1947,10 +1915,8 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
         else:  # body: adhesion over the body's contacts
             var body = Int(mi[a + 1])
             var counter = 0
-            for ip in range(npairs(res, f)):
-                var p = pick(res, f, ip)
-                if p < 0:
-                    continue
+            for ip in range(Int(get(res, f, OPA))):
+                var p = Int(get(res, f, OPA + 1 + ip))
                 if Int(mi[CPH + 11 * p + 2]) != body and Int(mi[GBODY + Int(mi[CPH + 11 * p])]) != body:  # either side (mj_transmission)
                     continue
                 for sl in range(nslot(mi, res, f, p)):
@@ -1962,10 +1928,8 @@ def actuation(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int):
             if counter == 0:
                 continue
             var scale = -force / Float32(counter)
-            for ip in range(npairs(res, f)):
-                var p = pick(res, f, ip)
-                if p < 0:
-                    continue
+            for ip in range(Int(get(res, f, OPA))):
+                var p = Int(get(res, f, OPA + 1 + ip))
                 if Int(mi[CPH + 11 * p + 2]) != body and Int(mi[GBODY + Int(mi[CPH + 11 * p])]) != body:
                     continue
                 var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
@@ -2391,10 +2355,8 @@ def update(mi: TI, mf: TF, res: TO, f: Int) -> Float32:
         res[(OQFC + v) * F + f] = 0
     comptime if ELL:
         cost = update_cone(mi, mf, res, f)
-    for ip in range(0 if ELL else npairs(res, f)):
-        var p = pick(res, f, ip)
-        if p < 0:
-            continue
+    for ip in range(0 if ELL else Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))
         var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
         for sl in range(nslot(mi, res, f, p)):
             if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
@@ -2447,10 +2409,8 @@ def hessian(mi: TI, mf: TF, res: TO, f: Int):
     for c in range(NC):
         res[(OHN + Int(mi[MTOH + c])) * F + f] = get(res, f, OM + c)
     sync()
-    for ip in range(npairs(res, f)):
-        var p = pick(res, f, ip)
-        if p < 0:
-            continue
+    for ip in range(Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))
         var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
         for sl in range(nslot(mi, res, f, p)):
             if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
@@ -2530,10 +2490,8 @@ def lowrank(mi: TI, res: TO, f: Int) -> Bool:
     order, k from the row's deepest dof back to the root). j lives on the pair's chain, which is the pattern of its
     deepest row, so the walk stays on that row's elimination path: no fill. w in OMV (free until the next search).
     False when a downdate's pivot collapses (float32): the caller rebuilds H from scratch."""
-    for ip in range(npairs(res, f)):
-        var p = pick(res, f, ip)
-        if p < 0:
-            continue
+    for ip in range(Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))
         var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
         var deep = 0
         for c in range(nch):
@@ -2650,11 +2608,8 @@ def peval(mi: TI, mf: TF, res: TO, f: Int, gauss: PNT, alpha: Float32) -> PNT:
                 q1 += (D * jar * jv).reduce_add()
                 q2 += 0.5 * (D * jv * jv).reduce_add()
     else:
-        for a in range(lane(), RS * nslots(res, f), LN):
-            var sl = slot(res, f, a // RS)
-            if sl < 0:
-                continue
-            var r = RS * sl + a % RS
+        for a in range(lane(), RS * Int(get(res, f, OACT)), LN):
+            var r = RS * Int(get(res, f, OACT + 1 + a // RS)) + a % RS
             var jar = get(res, f, OJAR + r); var jv = get(res, f, OJV + r)
             if jar + alpha * jv < 0:
                 var D = get(res, f, OD + r)
@@ -2725,10 +2680,8 @@ def search(mi: TI, mf: TF, res: TO, f: Int, scale: Float32, tolerance: Float32, 
         return 0
     var gtol = tolerance * snorm / scale
     mulM(mi, res, f, OMV, OSRCH)
-    for ip in range(npairs(res, f)):
-        var p = pick(res, f, ip)
-        if p < 0:
-            continue
+    for ip in range(Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))
         var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
         for sl in range(nslot(mi, res, f, p)):
             if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
@@ -2798,10 +2751,8 @@ def start(mi: TI, mf: TF, res: TO, f: Int, src: Int) -> Float32:
     for v in range(NV):
         res[(OCQACC + v) * F + f] = get(res, f, src + v)
     mulM(mi, res, f, OMA, OCQACC)
-    for ip in range(npairs(res, f)):
-        var p = pick(res, f, ip)
-        if p < 0:
-            continue
+    for ip in range(Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))
         var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
         for sl in range(nslot(mi, res, f, p)):
             if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
@@ -3185,11 +3136,8 @@ def newton(mi: TI, mf: TF, res: TO, f: Int):
             res[(OMA + v) * F + f] += alpha * get(res, f, OMV + v)
         var changed = False
         var eqflip = False
-        for a in range(NR * nslots(res, f)):
-            var sl = slot(res, f, a // NR)
-            if sl < 0:
-                continue
-            var r = RS * sl + a % NR
+        for a in range(NR * Int(get(res, f, OACT))):
+            var r = RS * Int(get(res, f, OACT + 1 + a // NR)) + a % NR
             res[(OJAR + r) * F + f] += alpha * get(res, f, OJV + r)
             if (get(res, f, OJAR + r) < 0) != (get(res, f, OST + r) != 0):
                 changed = True
@@ -3425,11 +3373,8 @@ def noslip(mi: TI, mf: TF, res: TO, f: Int):
     if nit == 0:
         return
     var imp0: Float32 = 0
-    for a in range(RS * nslots(res, f)):  # Newton's forces: -D jar on active rows
-        var sl = slot(res, f, a // RS)
-        if sl < 0:
-            continue
-        var r = RS * sl + a % RS
+    for a in range(RS * Int(get(res, f, OACT))):  # Newton's forces: -D jar on active rows
+        var r = RS * Int(get(res, f, OACT + 1 + a // RS)) + a % RS
         var fr: Float32 = 0
         if get(res, f, OST + r) != 0:
             var D = get(res, f, OD + r)
@@ -3448,10 +3393,8 @@ def noslip(mi: TI, mf: TF, res: TO, f: Int):
         var x_i = get(res, f, OZ + i)
         for adr in range(start, start + Int(mi[MNNZ + i]) - 1):
             res[(OZ + Int(mi[MCOL + adr])) * F + f] -= get(res, f, OLD + adr) * x_i
-    for ip in range(npairs(res, f)):
-        var p = pick(res, f, ip)  # w, A and J qacc_smooth - aref are fixed during the sweeps: once per step
-        if p < 0:
-            continue
+    for ip in range(Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))  # w, A and J qacc_smooth - aref are fixed during the sweeps: once per step
         var nch = Int(mi[CPH + 11 * p + 6]); var choff = Int(mi[CPH + 11 * p + 7])
         for sl in range(nslot(mi, res, f, p)):
             if get(res, f, OVALID + sbase(mi, res, f, p) + sl) == 0:
@@ -3477,10 +3420,8 @@ def noslip(mi: TI, mf: TF, res: TO, f: Int):
     var scale = 1 / (mf[COPT + 4] * Float32(NV))
     for it in range(nit):
         var improvement: Float32 = imp0 if it == 0 else 0
-        for ip in range(npairs(res, f)):
-            var p = pick(res, f, ip)
-            if p < 0:
-                continue
+        for ip in range(Int(get(res, f, OPA))):
+            var p = Int(get(res, f, OPA + 1 + ip))
             comptime if NCV > 0:  # a condim-1 pair has no friction rows
                 if mi[CCND + p] == 1:
                     continue
@@ -3526,10 +3467,8 @@ def noslip(mi: TI, mf: TF, res: TO, f: Int):
             break
     for v in range(NV):  # mj_dualFinish as a change on Newton's result: qfrc_constraint += J' (f - f_newton), qacc +=
         res[(OW + v) * F + f] = 0  # M^-1 of it (qacc_smooth + M^-1 J'f cancels ~140x in float32: qacc_smooth >> qacc)
-    for ip in range(npairs(res, f)):
-        var p = pick(res, f, ip)
-        if p < 0:
-            continue
+    for ip in range(Int(get(res, f, OPA))):
+        var p = Int(get(res, f, OPA + 1 + ip))
         comptime if NCV > 0:  # a condim-1 pair has no friction rows
             if mi[CCND + p] == 1:
                 continue
