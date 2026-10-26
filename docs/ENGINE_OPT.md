@@ -174,3 +174,11 @@ at 1,024 the working set mostly sits in the 96 MB Infinity Cache and reads drop 
 rows that are never touched (the ~166 empty slots) cost VRAM, not bandwidth. Ranked: (1) per-animal solver state in
 LDS/registers across Newton iterations (removes the 4.3x), (2) narrower J/OWC storage (halves each re-read), (3) slot
 pooling (VRAM only: ~2x animals per card, no speed).
+
+**Newton bandwidth lane, step 1 (2026-10-26, CPU only).** The "Newton re-reads" attribution above is not measured per
+phase: a static count of the Newton loop plus one Hessian rebuild plus noslip gives about 200 KB of the 611 KB. The
+bench is K = 0, so it never warm-starts (production builds K > 0). Reads are 99.95 % full 128 B lines. Lane divergence is
+a measured candidate: the per-contact loops walk each animal's own pair list, and on the bench's states a wave visits
+1.74 distinct pairs per step (3.21 in random order, 1.03 sorted; `tools/wave_coherence.py`). A wave-uniform union walk
+would cut those lines to 0.60x (0.42x random) with the same per-animal order. fp16/bf16 storage is out (gate 1e-5);
+LDS state is out at 65,536 (step 2 probe). Prereg with zero-code arms: `bench/LANE_UNION_PREREG.md`.
