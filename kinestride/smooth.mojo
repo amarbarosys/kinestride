@@ -28,7 +28,7 @@ from std.sys import argv, get_defined_int
 from std.time import perf_counter_ns
 from max.gpu import block_idx, block_dim, thread_idx
 from max.gpu.sync import barrier
-from max.gpu.host import DeviceContext
+from max.gpu.host import DeviceBuffer, DeviceContext
 from layout import TileTensor, TensorLayout, row_major
 from world import NP, PW, height_grad
 from convex import Sp, ConSet, collide, collide_hfield, primitive_pair, Height, HCons, ELLIPSOID, MESH, BOX, T as CT, S as CS, V as CVEC  # convex.mojo's scalar type (float64 with -DCCD64=1, which the export sets)
@@ -4601,6 +4601,15 @@ def main_cpu(dir: String) raises:
     print(F, "animals, stage", STAGE, ", K", max(K, 1), ":", us, "us per launch,", Float64(F * max(K, 1)) / us * 1e6, "animal-steps/s (CPU)")
 
 
+def rows(ctx: DeviceContext, o_b: DeviceBuffer[DType.float32], r0: Int, n: Int) raises -> List[Float32]:
+    """Rows r0..r0+n of the device scratch on the host. The pointer form of enqueue_copy copies the whole source buffer,
+    so a host list smaller than o_b would be overrun: the copy goes through a sub-buffer of exactly these rows."""
+    var h = List[Float32](length=n * F, fill=0)
+    ctx.enqueue_copy(h.unsafe_ptr(), o_b.create_sub_buffer[DType.float32](r0 * F, n * F))
+    ctx.synchronize()
+    return h^
+
+
 def main() raises:
     var dir = String(argv()[1])
     comptime if get_defined_int["LAYOUT", 0]() == 1:  # byte audit: float32 rows per animal of each region of the o buffer, then the inputs
@@ -4636,9 +4645,7 @@ def main() raises:
     ctx.enqueue_function(kernel, TileTensor(mi_b, LI), TileTensor(mf_b, LF), TileTensor(q_b, LQ), TileTensor(v_b, LV), TileTensor(u_b, LU), TileTensor(o_b, LO), grid_dim=GRID, block_dim=BLOCK)
     ctx.synchronize()
     comptime if NMUSCLE > 0:
-        var first = List[Float32](length=NOUTX * F, fill=0)
-        ctx.enqueue_copy(first.unsafe_ptr(), o_b)
-        ctx.synchronize()
+        var first = rows(ctx, o_b, 0, NOUTX)
         with open(dir + "muscle-first.bin", "w") as file:
             file.write_bytes(Span(unsafe_ptr=first.unsafe_ptr().unsafe_bitcast[UInt8](), length=NOUTX * F * 4))
     comptime if K > 0:
@@ -4661,9 +4668,7 @@ def main() raises:
         ctx.enqueue_function(kernel, TileTensor(mi_b, LI), TileTensor(mf_b, LF), TileTensor(q_b, LQ), TileTensor(v_b, LV), TileTensor(u_b, LU), TileTensor(o_b, LO), grid_dim=GRID, block_dim=BLOCK)
     ctx.synchronize()
     var us = Float64(perf_counter_ns() - t0) / 100 / 1000
-    var host = List[Float32](length=NROW * F, fill=0)
-    ctx.enqueue_copy(host.unsafe_ptr(), o_b)
-    ctx.synchronize()
+    var host = rows(ctx, o_b, 0, NROW if DUMP and STAGE >= 6 else NOUTX)  # the outputs; every row only for a dump
     with open(dir + "smooth.bin", "w") as file:
         file.write_bytes(Span(unsafe_ptr=host.unsafe_ptr().unsafe_bitcast[UInt8](), length=NOUTX * F * 4))
     comptime if DUMP and STAGE >= 6:
@@ -4673,8 +4678,10 @@ def main() raises:
             file.write(String(NROW, " ", F, " ", OVALID, " ", OD, " ", OAREF, " ", OJ, " ", NSLOT, " ", CPH, " ", NCP, " ", CKIND if NCV > 0 else -1, " ", OSD, "\n"))
     print(F, "animals, stage", STAGE, ", K", max(K, 1), ":", us, "us per launch,", Float64(F * max(K, 1)) / us * 1e6, "animal-steps/s")
     comptime if STAGE >= 6:
+        comptime assert ONCON < NOUTX, "ncon is read from the copied outputs"
+        var dg = rows(ctx, o_b, ODIAG, 3)
         var it: Float64 = 0; var ev: Float64 = 0; var hb: Float64 = 0; var slots: Float64 = 0; var itmax: Float32 = 0
         for a in range(F):
-            it += Float64(host[ODIAG * F + a]); ev += Float64(host[(ODIAG + 1) * F + a]); hb += Float64(host[(ODIAG + 2) * F + a]); slots += Float64(host[ONCON * F + a]); itmax = max(itmax, host[ODIAG * F + a])
+            it += Float64(dg[a]); ev += Float64(dg[F + a]); hb += Float64(dg[2 * F + a]); slots += Float64(host[ONCON * F + a]); itmax = max(itmax, dg[a])
         print("Newton iterations per animal", it / Float64(F), "max", itmax, "; line-search evaluations", ev / Float64(F))
         print("Hessian rebuilds per animal", hb / Float64(F), "; active slots", slots / Float64(F))
