@@ -47,7 +47,6 @@ comptime WAVE = get_defined_int["WAVE", 0]() == 1 and not CPU  # one animal per 
 comptime LN = 32 if WAVE else 1  # alike; loops written range(lane(), n, LN) split over lanes, sync() before others read
 comptime BLOCK = 32 if WAVE else 64
 comptime GRID = F if WAVE else (F + 63) // 64
-comptime UNION = get_defined_int["UNION", 0]() == 1 and not WAVE  # contact loops walk every pair (slot) ascending and skip the ones this animal lacks: the lanes of a wave visit the same pair together (docs/plans/UNION_WALK.md)
 comptime DUMP = get_defined_int["DUMP", 0]() == 1  # diagnostics (row_diag.py): write every scratch row and their offsets
 comptime STOP = get_defined_int["STOP", 99]()
 comptime INTEGRATOR = get_defined_int["INTEGRATOR", 0]()  # opt.integrator: 0 Euler, 1 RK4, 3 implicitfast (model.py export; absent = Euler)
@@ -319,9 +318,7 @@ comptime SOLROWS = 3 * NV if SOLVER == 1 else (4 * (NEFC + NEQR) + NV + NEQJ + N
 comptime OGAME = OSOL + SOLROWS  # GAME: four float32 rows per animal, energy health stamina dead; all zero = not started
 comptime OSLP = OGAME + (4 if GAME else 0)  # SLEEP: quiet checks in a row (MuJoCo tree_asleep + 11), SLEPT once asleep
 comptime OQAPP = OSLP + (1 if SLEEP else 0)  # NXF: qfrc_applied (MuJoCo mj_xfrcAccumulate), NV rows
-comptime OUPM = OQAPP + (NV if NXF > 0 else 0)  # UNION: masks of OPA (pairs) then OACT (slots), 24 bits per row as exact float32 integers
-comptime OUSM = OUPM + (NCP + 23) // 24
-comptime NROW = OUSM + (NSLOT + 23) // 24 if UNION and STAGE >= 6 else OUPM
+comptime NROW = OQAPP + (NV if NXF > 0 else 0)
 comptime SLEPT: Float32 = 11  # one past mjMINAWAKE (10) quiet checks
 comptime LI = row_major[NI]()
 comptime LF = row_major[NFLT]()
@@ -384,12 +381,6 @@ def put(res: TO, f: Int, row: Int, v: SIMD[DType.float32, 4], n: Int):
 @always_inline
 def get(res: TO, f: Int, row: Int) -> Float32:
     return res[row * F + f]
-
-
-@always_inline
-def has(res: TO, f: Int, mask: Int, i: Int) -> Bool:
-    """UNION: bit i of the 24-bit masks in rows mask.. (OUPM pairs, OUSM slots)."""
-    return (Int(get(res, f, mask + i // 24)) >> (i % 24)) & 1 != 0
 
 
 @always_inline
@@ -4495,16 +4486,11 @@ def step(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int, rks: Int
         return
     comptime if STAGE >= 6:
         contacts(mi, mf, qpos, qvel, res, f)
-        comptime if UNION:
-            for w in range(OUPM, NROW):
-                res[w * F + f] = 0
         var na = 0
         for sl in range(NSLOT):
             if get(res, f, OVALID + sl) != 0:
                 res[(OACT + 1 + na) * F + f] = Float32(sl)
                 na += 1
-                comptime if UNION:
-                    res[(OUSM + sl // 24) * F + f] += Float32(1 << (sl % 24))
         res[OACT * F + f] = Float32(na)
         var npa = 0  # pairs with a valid slot, ascending: every solver loop below visits these
         for p in range(NCP):
@@ -4514,8 +4500,6 @@ def step(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int, rks: Int
             if live:
                 res[(OPA + 1 + npa) * F + f] = Float32(p)
                 npa += 1
-                comptime if UNION:
-                    res[(OUPM + p // 24) * F + f] += Float32(1 << (p % 24))
         res[OPA * F + f] = Float32(npa)
         comptime if NEQ > 0:
             equality(mi, mf, qpos, qvel, ctrl, res, f)
@@ -4614,11 +4598,6 @@ def main_cpu(dir: String) raises:
     var us = Float64(perf_counter_ns() - t0) / 100 / 1000
     with open(dir + "smooth.bin", "w") as file:
         file.write_bytes(Span(unsafe_ptr=ob.unsafe_ptr(), length=NOUTX * F * 4))
-    comptime if DUMP and STAGE >= 6:  # tools/union_check.py: every row, and where the lists and masks sit
-        with open(dir + "dump.bin", "w") as file:
-            file.write_bytes(Span(unsafe_ptr=ob.unsafe_ptr(), length=NROW * F * 4))
-        with open(dir + "union.txt", "w") as file:
-            file.write(String(NROW, " ", F, " ", OACT, " ", OPA, " ", OUPM, " ", OUSM, " ", NSLOT, " ", NCP, " ", Int(UNION), "\n"))
     print(F, "animals, stage", STAGE, ", K", max(K, 1), ":", us, "us per launch,", Float64(F * max(K, 1)) / us * 1e6, "animal-steps/s (CPU)")
 
 
