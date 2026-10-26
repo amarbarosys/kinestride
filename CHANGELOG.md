@@ -2,6 +2,7 @@
 
 Full notes in `docs/releases/`. Newest first. Format: `~/iTools/dev/release-note/TEMPLATE.md`.
 
+- [v0.12.1](docs/releases/v0.12.1.md) (2026-10-26): muscle GPU builds no longer overrun host memory; a 65,536-body run needs 1.99 GB host RAM instead of 9.27 GB
 - [v0.12.0](docs/releases/v0.12.0.md) (2026-10-23): thirteen former MuJoCo refusals ported and gated (friction loss, condim 4/6, PGS/CG over every row, margin-0 mesh-mesh, ...); living-world renderer; muscle engine; streamed heightfield
 - [v0.11.0](docs/releases/v0.11.0.md) (2026-10-12): motion dataset driver (own clip, push, real fall per animal), per-animal eq_active
 - [v0.10.0](docs/releases/v0.10.0.md) (2026-10-12): one canonical body for any mocap skeleton, spike repair, limb planting
