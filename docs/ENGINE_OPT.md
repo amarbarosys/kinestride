@@ -189,3 +189,7 @@ equal in all three. So lane divergence costs time, and the wave-uniform contact 
 lane. Warm start (K = 1): iterations -26 %, time -1.9 %, not a lever. Phase split by time: kinematics through
 constraints 18.5 %, Newton start + first H 19.4 %, first gradient 2.4 %, Newton loop 36.2 %, noslip 17.9 %, Euler 5.7 %.
 Byte counters were not run (the counter recipe unbinds the iGPU, which drives a monitor). Detail: `bench/LANE_UNION_PREREG.md`.
+
+**Union walk (2026-10-26): dead, reverted.** Walking every pair of a wave's union with lanes masked kept results
+byte-identical but ran 16-27 % slower at 65,536 (`docs/plans/UNION_WALK.md`). wavewait: memory wait unchanged, 56 % more
+instructions. Kernel today: 128 VGPRs, 0 scratch. The sorted-input gain (-9.3 %) stands; the lever is physical order.
