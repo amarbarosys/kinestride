@@ -1,7 +1,7 @@
 """npc-mind NPCs with kinestride bodies (docs/plans/BRAIN.md B4): the first F of the world's 100 NPCs walk as spiders.
 
 Per tick (TICK_S of body time):
-  acts: the scripted schedule or the npc-mind base brain (Brains on its own DeviceContext; obs from the world)
+  acts: the scripted schedule or the npc-mind base brain (Brains; the gait shares its DeviceContext; obs from the world)
   world.step(acts): needs, food, wolves, and the tile and facing each NPC should reach (the grid move)
   bodies: every control step (K physics steps) intent.drive steers each spider toward its NPC's tile, then facing;
           fly-connectome's spider gait kernel turns the drives into servo targets on the card, the host engine steps
@@ -22,9 +22,10 @@ build: mojo build $(cat DIR/sizes.txt) -DFLIES=F -DSTAGE=7 -DK=10 -DCPU=1 -I kin
 """
 from max.algorithm import parallelize
 from std.math import cos, sin
+from std.os import setenv
 from std.random import random_float64, seed
 from std.sys import argv, get_defined_int
-from max.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext  # enqueue_function resolves the kernel handle against it
 from layout import TileTensor
 
 import smooth as eng
@@ -63,6 +64,11 @@ def main() raises:
     comptime assert eng.CPU, "host engine: 8 spiders step 9x faster on the CPU than on the card (fly-connectome spider_link.backend)"
     comptime assert eng.NUC == eng.NU, "the gait writes every ctrl row; the copy back takes the whole buffer"
     comptime assert eng.F <= N
+    # Mojo's memory pools reserve 1.28 GiB pinned host + 417 MiB device per process up front (heaptide; Brain
+    # mojo-baro/2026-10-08-leakd-engine-pinned-host.md); every buffer here is made once, so they buy nothing:
+    # peak RSS 1,580 -> 238 MB (184 MB with one shared context), output byte-equal. Set before the first DeviceContext; an explicit env wins.
+    _ = setenv("MODULAR_DEVICE_CONTEXT_HOST_MEMORY_MANAGER_SIZE", "0", False)
+    _ = setenv("MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE", "0", False)
     var a = argv()
     var dir = String(a[1])
     var arm = String(a[2])
@@ -119,7 +125,7 @@ def main() raises:
         v[b] = cos(2 * h) * vx - sin(2 * h) * vy  # free joint: linear velocity in the world frame
         v[F + b] = sin(2 * h) * vx + cos(2 * h) * vy
 
-    var ctx = DeviceContext()
+    var ctx = g.ctx  # one context for brains and gait: each DeviceContext maps its own 44 MB HSA queue area
     var kb = ctx.compile_function[sb.gait]()
     var u_b = ctx.enqueue_create_buffer[DType.float32](eng.NU * F)
     var drive_b = ctx.enqueue_create_buffer[DType.float32](2 * F)
