@@ -106,3 +106,15 @@ results, take 22.4 % longer in crowd order and 9.3 % less sorted. The adoption r
 traffic.sh run on C and R, which needs a counter pass with the session off DP-3, or a ms-only ship rule decided at
 review. Warm start missed its iteration band (-26 %) and moves time by -1.9 %: not a lever. Noslip (14.2 ms) costs as
 much as the Newton start, far above the static estimate.
+
+## Amendment (2026-10-26, after the timing run, before any union-walk code)
+
+The byte arms need the iGPU unbound, and it drives a monitor, so the ship rule moves to time. The new thresholds are no
+looser than the frozen adoption rule:
+
+- The union walk against the per-lane walk, the same flags otherwise, 65,536 animals, stage 7: random order at least
+  10 % faster, and bench order at least 5 % faster. Medians of the C R S C R S runs, first run of the session discarded.
+- Output byte-identical to the per-lane walk in all three orders (`tools/permute_bench.py check` against the per-lane
+  C output, and a direct `cmp` in C order), every check.sh stage PASS, and its mutants caught.
+- traffic.sh no longer blocks. One counter pass on the shipped code once DP-3 is off the iGPU, results appended here.
+  If its reads fall outside the frozen S and R bands, the mechanism is re-derived (the speed claim stands on ms).
