@@ -94,6 +94,7 @@ EQ_EULER_BAR = 1e-4  # equality stage, qacc_euler only: see check()
 SLEEP_QPOS_BAR = 1e-5  # sleep stage, the sleepers' frozen qpos: see check()
 CHAOS_SEEDS = int(os.environ.get('CHAOS_SEEDS', 12))  # k-step gate: MuJoCo reruns of each start under a 1e-6 perturbation (see check())
 FLOOR_X = 3  # contact stage: bar = max(REL, 3 x the field's float32 input floor), see check()
+FLOOR_X_FORCE = 5  # CLIST: one contact's force vs MuJoCo on float32 inputs: measured 3.2 x the floor on the fly (a stance's forces are nearly degenerate; the net qfrc_constraint stays inside 3 x)
 FLOOR_X_CONE = 15  # elliptic cone: the converged nonlinear cone solve amplifies float32 rounding of D, J and jar: measured 4e-5 (noslip 0) and 5.3e-5 (noslip 5) on qfrc_constraint, floor 4.3e-6
 WORLD_FIRST = ('xpos', 'xquat', 'xipos', 'cinert', 'crb', 'cvel')  # body-indexed fields whose row 0 is the world
 ENGINE = Path(__file__).parent
@@ -289,6 +290,7 @@ def onfaces(q, v, side):
 
 INTEGRATORS = (mujoco.mjtIntegrator.mjINT_EULER, mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_IMPLICIT, mujoco.mjtIntegrator.mjINT_IMPLICITFAST)
 SOLVERS = (mujoco.mjtSolver.mjSOL_PGS, mujoco.mjtSolver.mjSOL_CG, mujoco.mjtSolver.mjSOL_NEWTON)  # all three ported
+EVSTEPS = 20  # CLIST: steps between the two contact lists whose difference is the event stream (contact_events)
 STALE_RK4 = ('qH', 'qHDiagInv')  # mj_RungeKutta and mj_implicit (LU in qLU) never factor qH: MuJoCo's d->qH after such a step is stale, not compared
 
 
@@ -1922,10 +1924,24 @@ def reference_fresh(m, fn, fields, qpos, qvel=None, ctrl=None, xfrc=None, eqact=
     return {f: np.array(v) for f, v in out.items()}
 
 
+def contact_events(prev, cur, dt, ring, head):
+    """Unit 10 (audio hooks): contact begin/end between two contact lists (per animal an (n, 11) array: geom1, geom2, ..., force normal at
+    column 9) as records (animal, +1 begin or -1 end, geom1, geom2, impulse = summed normal force of the pair's contacts x dt) appended to
+    the host ring `ring` (capacity rows x 5, float32) from `head` (a monotone count; the oldest records are overwritten). Returns head."""
+    for a, (p, c) in enumerate(zip(prev, cur)):
+        pk, ck = {(int(r[0]), int(r[1])) for r in p}, {(int(r[0]), int(r[1])) for r in c}
+        for k in sorted(pk ^ ck):
+            rows = c if k in ck else p
+            ring[head % len(ring)] = (a, 1 if k in ck else -1, *k, sum(r[9] for r in rows if (int(r[0]), int(r[1])) == k) * dt)
+            head += 1
+    return head
+
+
 def check(mjcf, out, stage, count=64, k=0, oracle=None):
     """oracle: MuJoCo runs this MJCF instead of mjcf (same bodies and pair order), e.g. terrain_plane.xml for the
     engine's heightfield terrain.xml; standing states come from it too."""
     hfexact = bool(os.environ.get('HFEXACT'))  # exact heightfield contact (GJK + EPA per cell prism) instead of the tangent plane
+    clist = int(os.environ.get('CLIST', 0))  # CLIST=k: the engine's contact list (-DCLIST=k, unit 1) vs d.contact + mj_contactForce, matched by geom pair
     convex = bool(os.environ.get('CONVEX'))  # box and ellipsoid vs mesh pairs too (GJK + EPA), states moved into the arena's walls and stones
     feet = stage in ('contact', 'actuated', 'sptendon_act') or (stage == 'equality' and bool(load(mjcf).npair))  # equality + contacts: the contact path
     fx = FLOOR_X_CONE if load(mjcf).opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC else FLOOR_X
@@ -2021,6 +2037,34 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
                 depth = ((s.mesh_vert[a:a + c] @ d.geom_xmat[g2].reshape(3, 3).T + d.geom_xpos[g2] - d.geom_xpos[g1]) @ d.geom_xmat[g1].reshape(3, 3)[:, 2]).min()
                 ambiguous[n] += abs(depth - s.pair_margin[i]) < 4 * np.spacing(np.float32(np.abs(d.geom_xpos[g2]).max()))
         s.opt.noslip_iterations = noslip
+        if clist:  # per state the contacts that carry rows: geom1, geom2, dist, pos 3, frame normal 3, force normal, |force tangent|; again after EVSTEPS mj_step (the events)
+            f6 = np.zeros(6)
+            def listed():
+                mujoco.mj_forward(s, d)
+                e = []
+                for i, c in enumerate(d.contact[:d.ncon]):
+                    if c.efc_address >= 0:
+                        mujoco.mj_contactForce(s, d, i, f6)
+                        e.append([c.geom1, c.geom2, c.dist, *c.pos, *c.frame[:3], f6[0], np.hypot(f6[1], f6[2])])
+                return np.array(e).reshape(-1, 11)
+            want_cl, want_cl1, q1, v1 = [], [], np.empty_like(q), np.empty_like(v)
+            for n in range(count):
+                d.qpos[:], d.qvel[:], d.ctrl[:] = q[n], v[n], u[n]
+                want_cl.append(listed())
+                for _ in range(EVSTEPS):
+                    mujoco.mj_step(s, d)
+                q1[n], v1[n] = d.qpos, d.qvel
+                want_cl1.append(listed())
+            r32 = lambda x: x.astype(np.float32).astype(np.float64)
+            ffloor = {'force_n': 0.0, 'force_t': 0.0}  # float32 floor of the forces: MuJoCo on the float32-rounded state vs the float64 one, same contact order
+            for n in range(count):
+                d.qpos[:], d.qvel[:], d.ctrl[:] = r32(q[n]), r32(v[n]), r32(u[n])
+                alt_cl = listed()
+                if len(alt_cl) == len(want_cl[n]) and (alt_cl[:, :2] == want_cl[n][:, :2]).all():
+                    for nm, c in (('force_n', 9), ('force_t', 10)):
+                        ffloor[nm] = max(ffloor[nm], float(np.abs(alt_cl[:, c] - want_cl[n][:, c]).max(initial=0)))
+            allcl = np.concatenate(want_cl)
+            ffloor = {nm: v / max(float(np.abs(allcl[:, c]).max()), 1e-30) for (nm, v), c in zip(ffloor.items(), (9, 10))}
         if convex:  # the gate must meet convex contacts: no vacuous pass on states that touch no stone or wall
             ok, need = int((nconv > 0).sum()), int(os.environ.get('CONVEX_MIN', count // 4))
             print(f"{'PASS' if ok >= need else 'FAIL'} convex contacts present in {ok}/{count} states (at least {need})")
@@ -2110,7 +2154,7 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     q.astype(np.float32).T.copy().tofile(out / 'qpos.bin')  # (nq, flies): flies fastest, as the engine reads it
     v.astype(np.float32).T.copy().tofile(out / 'qvel.bin')  # (nv, flies)
     binary = out / f'{stage}_{count}'
-    flags = (out / 'sizes.txt').read_text().split() + ([f'-DNXF={nxf}'] if nxf else []) + (['-DEQACT=1'] if eqact else [])
+    flags = (out / 'sizes.txt').read_text().split() + ([f'-DNXF={nxf}'] if nxf else []) + (['-DEQACT=1'] if eqact else []) + ([f'-DCLIST={clist}'] if clist else [])
     subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', *flags, f'-DFLIES={count}', f'-DSTAGE={number}', f'-DK={k}', f"-DWAVE={os.environ.get('WAVE', 0)}", f"-DDUMP={os.environ.get('DUMP', 0)}", f"-DCPU={os.environ.get('CPU', 0)}", *os.environ.get('MOJO_DEFS', '').split(), str(ENGINE / 'smooth.mojo'), '-o', str(binary)], check=True)
     if os.environ.get('BUILD_ONLY'):  # tools/check_all.sh phase 1: export and build on the CPU, run nothing
         print(f'built {binary}')
@@ -2122,10 +2166,14 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     rows = np.fromfile(out / ('state.bin' if k else 'smooth.bin'), np.float32).reshape(-1, count).T
     if k and os.environ.get('SAVE_STATES'):  # the engine's own state after k steps, as a STATES file for a force check on states the engine reached
         np.savez(os.environ['SAVE_STATES'], qpos=rows[:, :m.nq].astype(np.float64), qvel=rows[:, m.nq:m.nq + m.nv].astype(np.float64))
+    if clist:  # the list rides after the stage's outputs in smooth.bin (OCL, 11 rows per contact)
+        rows, got_cl = rows[:, :-11 * clist], rows[:, -11 * clist:].reshape(count, clist, 11)
     sizes = [want[f][0].size for f in fields]
     if rows.shape[1] != sum(sizes):
         raise SystemExit(f'FAIL {stage}: engine wrote {rows.shape[1]} values per fly, MuJoCo {sum(sizes)}')
     got = np.split(rows, np.cumsum(sizes)[:-1], axis=1)
+    ncon_eng = got[fields.index('ncon')][:, 0].astype(int) if clist and 'ncon' in fields else None
+    ncon_at = sum(sizes[:fields.index('ncon')]) if clist else 0  # ncon's column in smooth.bin
     if k and m.opt.enableflags & int(mujoco.mjtEnableBit.mjENBL_SLEEP):  # sleep: the asleep sets (qvel exactly zero) must agree, and be a mix
         aw, ag = (want['qvel'].reshape(count, -1) == 0).all(1), (got[fields.index('qvel')] == 0).all(1)
         print(f'sleep: asleep after {k} steps MuJoCo {int(aw.sum())}/{count}, engine {int(ag.sum())}/{count}, sets differ in {int((aw != ag).sum())} states')
@@ -2184,6 +2232,52 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
         compare({'qfrc_constraint (ambiguous states)': (want['qfrc_constraint'].reshape(count, -1)[flip], got[i][flip])}, 1.0) if flip.any() else None
         want['qfrc_constraint'] = want['qfrc_constraint'].reshape(count, -1)[~flip]
         got[i] = got[i][~flip]
+    if clist:  # per state with the same contact count: each MuJoCo contact needs an engine contact of its geom pair (nearest by position)
+        fb = max(REL, fx * floor.get('qfrc_constraint', 0))
+        names = ('dist', 'pos', 'normal', 'force_n', 'force_t')
+        cols = (slice(2, 3), slice(3, 6), slice(6, 9), slice(9, 10), slice(10, 11))
+        A = {nm: ([], []) for nm in names}
+        used = miss = skipped = total = 0
+        for n in range(count):
+            w, g = want_cl[n], got_cl[n][:min(int(ncon_eng[n]), clist)]
+            if len(w) != int(ncon_eng[n]):
+                skipped += 1
+                continue
+            free = list(range(len(g)))
+            for c in w:
+                cand = [j for j in free if g[j, 0] == c[0] and g[j, 1] == c[1]]
+                if not cand:
+                    miss += 1
+                    continue
+                j = min(cand, key=lambda j: float(np.abs(g[j, 3:6] - c[3:6]).sum()))
+                free.remove(j)
+                total += 1
+                for nm, sl in zip(names, cols):
+                    A[nm][0].append(c[sl]); A[nm][1].append(g[j, sl])
+        print(f"{'PASS' if not miss and total and skipped <= count // 4 else 'FAIL'} clist: {total} contacts matched by geom pair in {count - skipped}/{count} states, {miss} unmatched, {skipped} states skipped (ncon differs, at most {count // 4}); k={clist}")
+        if miss or not total or skipped > count // 4:
+            sys.exit(1)
+        bad += [b for nm in names for b in compare({f'clist {nm}': (np.array(A[nm][0]), np.array(A[nm][1]))}, max(fb, FLOOR_X_FORCE * ffloor.get(nm, 0)))]
+        print('clist force float32 floors (MuJoCo on float32 inputs): ' + ', '.join(f'{nm} {v:.1e}' for nm, v in ffloor.items()))
+        # events: the engine's lists at the states and EVSTEPS steps on (same binary, qpos.bin rewritten) vs MuJoCo's, twice for byte equality
+        def engine_events():
+            r = np.fromfile(out / 'smooth.bin', np.float32).reshape(-1, count).T
+            return [r[n, -11 * clist:].reshape(clist, 11)[:min(int(r[n, ncon_at]), clist)] for n in range(count)]
+        q1.astype(np.float32).T.copy().tofile(out / 'qpos.bin'); v1.astype(np.float32).T.copy().tofile(out / 'qvel.bin')
+        dt = m.opt.timestep
+        l0 = [g[:min(int(e), clist)] for g, e in zip(got_cl, ncon_eng)]
+        subprocess.run([str(binary), str(out) + '/'], check=True); l1 = engine_events(); b1 = (out / 'smooth.bin').read_bytes()
+        subprocess.run([str(binary), str(out) + '/'], check=True); l2 = engine_events(); b2 = (out / 'smooth.bin').read_bytes()
+        same = [n for n in range(count) if len(want_cl[n]) == len(l0[n]) and len(want_cl1[n]) == len(l1[n])]
+        ring = [np.zeros((4 * count, 5), np.float32) for _ in range(3)]
+        n_ref = contact_events([want_cl[n] for n in same], [want_cl1[n] for n in same], dt, ring[0], 0)
+        n_eng = contact_events([l0[n] for n in same], [l1[n] for n in same], dt, ring[1], 0)
+        n_two = contact_events([l0[n] for n in same], [l2[n] for n in same], dt, ring[2], 0)
+        ok = n_ref > 0 and n_ref == n_eng and (ring[0][:n_ref, :4] == ring[1][:n_eng, :4]).all() and b1 == b2 and ring[1].tobytes() == ring[2].tobytes()
+        print(f"{'PASS' if ok else 'FAIL'} events: MuJoCo {n_ref} begin/end events over {len(same)} states and {EVSTEPS} steps, engine {n_eng} (same animal, kind, geom pair, in order); two engine runs byte-equal {b1 == b2 and ring[1].tobytes() == ring[2].tobytes()}")
+        if not ok:
+            sys.exit(1)
+        bad += compare({'events impulse': (ring[0][:n_ref, 4:], ring[1][:n_eng, 4:])}, max(fb, FLOOR_X_FORCE * ffloor['force_n']))
     # mj_Euler factors qH only when some dof has damping (and eulerdamp is on); otherwise it solves with qLD and qH stays 0
     undamped = m.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER and (
         not m.dof_damping.any() or m.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_EULERDAMP)

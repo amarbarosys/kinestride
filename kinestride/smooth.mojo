@@ -242,7 +242,10 @@ comptime NOUT = OSC if STAGE == 1 else (OM + NC if STAGE == 2 else (OLDI + NV if
 comptime OTLEN = NOUT  # SPATIAL: tendon outputs after the stage's own: ten_length, ten_velocity, ten_J (dense, NV per tendon)
 comptime OTVEL = OTLEN + NTEN
 comptime OTJ = OTVEL + NTEN
-comptime NOUTX = OTJ + NTEN * NV if SPATIAL else NOUT
+comptime NOUTB = OTJ + NTEN * NV if SPATIAL else NOUT
+comptime CLIST = get_defined_int["CLIST", 0]()  # contact list (STAGE >= 6, pyramidal or elliptic condim 3): the first k valid contacts per animal, 11 rows each after the outputs
+comptime OCL = NOUTB  # per contact: geom1, geom2, dist, pos 3 (world), frame normal 3, force normal, |force tangent| (mj_contactForce); read the first min(ncon, k)
+comptime NOUTX = OCL + 11 * CLIST
 comptime OCACC = NOUTX  # scratch rows after the output: cacc, cfrc_body per body (world included)
 comptime OCFRC = OCACC + 6 * NB
 comptime NSLOT = get_defined_int["NSLOT", 0]()  # contact slots: 3 per plane-mesh pair (MuJoCo maxplanemesh), 1 per sphere pair
@@ -318,7 +321,9 @@ comptime SOLROWS = 3 * NV if SOLVER == 1 else (4 * (NEFC + NEQR) + NV + NEQJ + N
 comptime OGAME = OSOL + SOLROWS  # GAME: four float32 rows per animal, energy health stamina dead; all zero = not started
 comptime OSLP = OGAME + (4 if GAME else 0)  # SLEEP: quiet checks in a row (MuJoCo tree_asleep + 11), SLEPT once asleep
 comptime OQAPP = OSLP + (1 if SLEEP else 0)  # NXF: qfrc_applied (MuJoCo mj_xfrcAccumulate), NV rows
-comptime NROW = OQAPP + (NV if NXF > 0 else 0)
+comptime OCLS = OQAPP + (NV if NXF > 0 else 0)  # CLIST: per slot its list entry (pair * k + index + 1, 0 = not listed), then the entries written so far this step
+comptime OCLN = OCLS + NSLOT
+comptime NROW = OCLN + 1 if CLIST > 0 else OCLS
 comptime SLEPT: Float32 = 11  # one past mjMINAWAKE (10) quiet checks
 comptime LI = row_major[NI]()
 comptime LF = row_major[NFLT]()
@@ -1336,6 +1341,15 @@ def emit_contact(mi: TI, mf: TF, qvel: TV, res: TO, f: Int, p: Int, count: Int, 
         res[(OVALID + slot) * F + f] = 0
         return
     res[(OVALID + slot) * F + f] = Float32(p + 1) if ELL else Float32(1)  # elliptic: the pair index + 1, for the cone's mu and friction
+    comptime if CLIST > 0:
+        var j = Int(get(res, f, OCLN))
+        res[OCLN * F + f] = Float32(j + 1)
+        res[(OCLS + slot) * F + f] = Float32(p * CLIST + j + 1) if j < CLIST else Float32(0)
+        if j < CLIST:  # pos stays relative to the floating origin until clist_finish
+            var o = OCL + 11 * j
+            res[o * F + f] = Float32(mi[CPH + 11 * p]); res[(o + 1) * F + f] = Float32(mi[CPH + 11 * p + 1]); res[(o + 2) * F + f] = dist
+            for c in range(3):
+                res[(o + 3 + c) * F + f] = cpos[c]; res[(o + 6 + c) * F + f] = normal[c]
     comptime if DIMX > 3:
         emit_rows(mi, mf, qvel, res, f, p, count, cpos, dist - imargin, normal, y, z, com, com1)
         return
@@ -1710,6 +1724,8 @@ def contacts(mi: TI, mf: TF, qpos: TQ, qvel: TV, res: TO, f: Int):
     mj_makeImpedance and mj_referenceConstraint, per exported plane-mesh pair; mjc_SphereSphere (one contact on the centre line, a two-body Jacobian) per sphere pair. A heightfield ground (HFGEOM) is not
     mjc_ConvexHField (GJK+EPA on cell prisms): the plane is the tangent plane of world.mojo's terrain function under
     the mesh centre, exact on linear terrain, wrong where the terrain bends inside one mesh."""
+    comptime if CLIST > 0:
+        res[OCLN * F + f] = 0
     comptime if NCV > 0:  # the pool of the convex and exact-heightfield pairs starts empty each step
         res[OPP * F + f] = 0
         res[(OPP + 1) * F + f] = 0
@@ -4246,6 +4262,39 @@ def origin(mi: TI, qpos: TQ, f: Int, b: Int) -> V3:
     return V3(0)
 
 
+def clist_finish(mi: TI, mf: TF, qpos: TQ, res: TO, f: Int):
+    """CLIST: after the solve, each listed contact's world position and its mj_contactForce normal and tangent magnitude. Pyramidal:
+    normal = sum of the 4 row forces, tangent = |(mu0 (f0 - f1), mu1 (f2 - f3))|; elliptic: rows 0, 1, 2 (friction rows from the noslip
+    result when it ran). Row force: noslip's OFRC, else -D jar on an active row."""
+    var nit = Int(mi[CITER + 2])
+    for a in range(Int(get(res, f, OACT))):
+        var slot = Int(get(res, f, OACT + 1 + a))
+        var v = Int(get(res, f, OCLS + slot)) - 1
+        if v < 0:
+            continue
+        var p = v // CLIST
+        var o = OCL + 11 * (v % CLIST)
+        var org = origin(mi, qpos, f, Int(mi[CPH + 11 * p + 2]))
+        for c in range(3):
+            res[(o + 3 + c) * F + f] += org[c]
+        var r = RS * slot
+        var fnorm: Float32 = 0; var ft: Float32 = 0
+        comptime if ELL:
+            fnorm = get(res, f, OFRC + r)
+            var t0 = get(res, f, (OFRN if nit > 0 else OFRC) + r + 1); var t1 = get(res, f, (OFRN if nit > 0 else OFRC) + r + 2)
+            ft = sqrt(t0 * t0 + t1 * t1)
+        else:
+            var fk = SIMD[DType.float32, 4](0)
+            for k in range(4):
+                fk[k] = get(res, f, OFRC + r + k) if nit > 0 else (-get(res, f, OD + r + k) * get(res, f, OJAR + r + k) if get(res, f, OST + r + k) != 0 else Float32(0))
+            fnorm = fk.reduce_add()
+            var t0 = mf[CPF + 14 * p + 2] * (fk[0] - fk[1]); var t1 = mf[CPF + 14 * p + 3] * (fk[2] - fk[3])
+            ft = sqrt(t0 * t0 + t1 * t1)
+        res[(o + 9) * F + f] = fnorm
+        res[(o + 10) * F + f] = ft
+
+
+@always_inline
 def absolute(mi: TI, qpos: TQ, res: TO, f: Int):
     """Back to world positions, once per step, in the rows a later reader takes as world: xpos, xipos, geom_xpos,
     xanchor, subtree_com (STAGE >= 2), each by its own tree's origin (world geoms are already world)."""
@@ -4543,6 +4592,9 @@ def step(mi: TI, mf: TF, qpos: TQ, qvel: TV, ctrl: TU, res: TO, f: Int, rks: Int
         comptime if STOP == 8 or STOP == 9:
             return
         noslip(mi, mf, res, f)
+        comptime if CLIST > 0:
+            comptime assert DIMX == 3, "CLIST: condim 3 contacts only"
+            clist_finish(mi, mf, qpos, res, f)
         comptime if K > 0 and INTEGRATOR != 1:  # RK4 saves it after its last forward pass (rkstage)
             for v in range(NV):
                 res[(OWARM + v) * F + f] = get(res, f, OCQACC + v)

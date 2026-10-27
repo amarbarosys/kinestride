@@ -41,4 +41,13 @@ names and order are `model.STAGES[stage]`. Each stage is checked against MuJoCo 
 writes `u_b` (its controller), calls `step(ctx, k)` and `frame(ctx, kc, kr, ks, ksc, kcs)` with kernels it compiled once
 (kernel handles cannot live in a struct), and reads `out_h` after copying `img_b`. `view.mojo` is that loop with ctrl held.
 
-Not in this surface yet: contacts as a list, a window for game use.
+## Contacts as a list (`-DCLIST=k`)
+
+`-DCLIST=k` (STAGE >= 6, condim 3) appends 11 rows per listed contact to `smooth.bin`, after the stage's fields: geom1, geom2,
+dist, pos 3 (world), frame normal 3 (geom1 to geom2), force normal, |force tangent| (`mj_contactForce`). The first `min(ncon, k)`
+contacts of each animal are listed, `ncon` being the stage's own field; order is by pair. At k = 0, the default, the list is
+compiled out: same bytes and same time as without it. `model.contact_events(prev, cur, dt, ring, head)` turns two lists into
+begin/end records (animal, +1/-1, geom1, geom2, impulse) in a host ring buffer: that is the audio hook, no audio engine.
+`kinestride/check.sh clist` checks both against MuJoCo.
+
+Not in this surface yet: a window for game use.
