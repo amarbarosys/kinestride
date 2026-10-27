@@ -1064,6 +1064,21 @@ if [ "$stage" = rk4 ]; then  # RK4 (mj_RungeKutta) vs MuJoCo with opt.integrator
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all rk4 checks"; exit 0
 fi
+if [ "$stage" = clist ]; then  # contact list out (-DCLIST=24, unit 1 of docs/plans/GAME_ENGINE.md): per contact geom pair, dist, pos, frame normal, mj_contactForce normal and tangent vs d.contact, fly pyramidal and elliptic
+  CLIST=24 $M -m kinestride.model check .work/assets/fly/body.xml $X/clist contact 64 || { echo "FAIL clist pyramidal"; fail=$((fail+1)); }
+  E=$($M -c "from kinestride.model import elliptic; print(elliptic('.work/assets/fly/body.xml', 0))")
+  CLIST=24 $M -m kinestride.model check $E $X/clist_cone contact 64 || { echo "FAIL clist elliptic"; fail=$((fail+1)); }
+  E5=$($M -c "from kinestride.model import elliptic; print(elliptic('.work/assets/fly/body.xml', 5))")
+  CLIST=24 $M -m kinestride.model check $E5 $X/clist_noslip contact 64 || { echo "FAIL clist elliptic noslip 5"; fail=$((fail+1)); }
+  # mutants: geom1 and geom2 swapped, normal force from one pyramid row, elliptic tangent read from the wrong block
+  for mut in 's/res\[o \* F + f\] = Float32(mi\[CPH + 11 \* p\]); res\[(o + 1) \* F + f\] = Float32(mi\[CPH + 11 \* p + 1\])/res[o * F + f] = Float32(mi[CPH + 11 * p + 1]); res[(o + 1) * F + f] = Float32(mi[CPH + 11 * p])/' \
+             's/fnorm = fk.reduce_add()/fnorm = fk[0]/'; do
+    CLIST=24 ~/iTools/bin/mutant-check kinestride/smooth.mojo "$mut" -- $M -m kinestride.model check .work/assets/fly/body.xml $X/mutant contact 64 || fail=$((fail+1))
+  done
+  CLIST=24 ~/iTools/bin/mutant-check kinestride/smooth.mojo 's/(OFRN if nit > 0 else OFRC) + r + 1/OST + r + 1/' -- $M -m kinestride.model check $E $X/mutant contact 64 || fail=$((fail+1))
+  [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
+  echo "PASS all clist checks"; exit 0
+fi
 if [ "$stage" = cone ]; then  # elliptic friction cone on the walking fly: Newton (noslip 0) and Newton + noslip 5 (QCQP over the friction ellipse), MuJoCo run to convergence
   for ns in 0 5; do
     E=$($M -c "from kinestride.model import elliptic; print(elliptic('.work/assets/fly/body.xml', $ns))")
