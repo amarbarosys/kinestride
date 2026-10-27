@@ -10,6 +10,7 @@ and tagged scenario events are game-layer extensions, not MuJoCo physics ports.
 """
 
 from std.sys import argv
+from max.gpu.host import DeviceBuffer, DeviceContext
 
 @fieldwise_init
 struct GameState(Copyable, Movable):
@@ -79,6 +80,48 @@ def actuator_scale(state: GameState, floor_scale: Float32) -> Float32:
     if stamina < floor:
         return floor
     return stamina
+
+
+struct Snapshot(Movable):
+    """Device copy of the state that changes: qpos, qvel, muscle act rows, warm-start qacc rows. Never model or scratch."""
+    var q: DeviceBuffer[DType.float32]
+    var v: DeviceBuffer[DType.float32]
+    var act: DeviceBuffer[DType.float32]
+    var warm: DeviceBuffer[DType.float32]
+    var bytes: Int
+
+    def __init__(out self, ctx: DeviceContext, nq: Int, nv: Int, nact: Int, nwarm: Int, f: Int) raises:
+        self.q = ctx.enqueue_create_buffer[DType.float32](nq * f)
+        self.v = ctx.enqueue_create_buffer[DType.float32](nv * f)
+        self.act = ctx.enqueue_create_buffer[DType.float32](max(nact, 1) * f)
+        self.warm = ctx.enqueue_create_buffer[DType.float32](max(nwarm, 1) * f)
+        self.bytes = (nq + nv + nact + nwarm) * f * 4
+
+
+def snapshot(ctx: DeviceContext, q_b: DeviceBuffer[DType.float32], v_b: DeviceBuffer[DType.float32],
+             o_b: DeviceBuffer[DType.float32], f: Int, act_row: Int, nact: Int, warm_row: Int, nwarm: Int,
+             nq: Int, nv: Int) raises -> Snapshot:
+    """Copy qpos, qvel and the o rows [act_row, +nact), [warm_row, +nwarm) (rows are [row][animal], F floats each)."""
+    var s = Snapshot(ctx, nq, nv, nact, nwarm, f)
+    ctx.enqueue_copy(s.q, q_b)
+    ctx.enqueue_copy(s.v, v_b)
+    if nact > 0:
+        ctx.enqueue_copy(s.act, o_b.create_sub_buffer[DType.float32](act_row * f, nact * f))
+    if nwarm > 0:
+        ctx.enqueue_copy(s.warm, o_b.create_sub_buffer[DType.float32](warm_row * f, nwarm * f))
+    ctx.synchronize()
+    return s^
+
+
+def restore(ctx: DeviceContext, s: Snapshot, q_b: DeviceBuffer[DType.float32], v_b: DeviceBuffer[DType.float32],
+            o_b: DeviceBuffer[DType.float32], f: Int, act_row: Int, nact: Int, warm_row: Int, nwarm: Int) raises:
+    ctx.enqueue_copy(q_b, s.q)
+    ctx.enqueue_copy(v_b, s.v)
+    if nact > 0:
+        ctx.enqueue_copy(o_b.create_sub_buffer[DType.float32](act_row * f, nact * f), s.act)
+    if nwarm > 0:
+        ctx.enqueue_copy(o_b.create_sub_buffer[DType.float32](warm_row * f, nwarm * f), s.warm)
+    ctx.synchronize()
 
 
 def replay_binary_stream(input_path: String, rows_path: String, source_path: String) raises:

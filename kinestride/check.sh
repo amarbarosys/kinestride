@@ -39,6 +39,18 @@ if [ "$stage" = muscle ]; then
   "$T/muscle-demo" "$T/spider/" 500 sine
   echo "PASS all muscle checks"; exit 0
 fi
+if [ "$stage" = replay ]; then  # unit 6: snapshot/restore of qpos, qvel, act, warm start (game_state.mojo) on the muscle spider
+  T=$X/replay; mkdir -p "$T"
+  $M kinestride/muscle_demo_check.py "$T"
+  B="$HOME/iTools/bin/mojo-cached build $(cat "$T/sizes.txt") -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/replay_check.mojo"
+  eval "$B -DCPU=1 -o $T/replay-cpu" > "$T/build-cpu.log" 2>&1 || { echo "FAIL replay CPU build: $T/build-cpu.log"; exit 1; }
+  [ "${BUILD_ONLY:-0}" = 1 ] && { echo "PASS replay CPU build"; exit 0; }
+  eval "$B -o $T/replay" > "$T/build.log" 2>&1 || { echo "FAIL replay GPU build: $T/build.log"; exit 1; }
+  "$T/replay" "$T/" 20 60
+  ~/iTools/bin/mutant-check kinestride/game_state.mojo 's/ctx.enqueue_copy(o_b.create_sub_buffer\[DType.float32\](act_row \* f, nact \* f), s.act)/pass/' -- \
+    bash -c 'set -euo pipefail; ~/iTools/bin/mojo-cached build $(cat .work/replay/sizes.txt) -DFLIES=1 -DSTAGE=7 -DK=1 -I kinestride kinestride/replay_check.mojo -o .work/replay/mutant > .work/replay/mutant-build.log 2>&1; .work/replay/mutant .work/replay/ 20 60'
+  echo "PASS replay checks"; exit 0
+fi
 if [ "$stage" = game ]; then
   T=$X/muscle-game; mkdir -p "$T"
   $M -m kinestride.game_state_check
