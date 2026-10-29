@@ -22,7 +22,7 @@ def write_all(fd: Int, p: Pointer[UInt8, MutUntrackedOrigin], n: Int) -> Bool:
     var left = n
     var q = p
     while left > 0:
-        var w = external_call["write", Int](fd, q.unsafe_bitcast[NoneType](), left)
+        var w = external_call["__write", Int](fd, q.unsafe_bitcast[NoneType](), left)
         if w <= 0:
             return False
         q = q.unsafe_offset(w)

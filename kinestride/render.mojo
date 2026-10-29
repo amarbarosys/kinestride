@@ -1296,7 +1296,7 @@ def stream(ctx: DeviceContext, kc: type_of(DeviceContext(0).compile_function[cle
         var left = W * H * 4
         var p = out_h.unsafe_ptr().unsafe_bitcast[UInt8]()
         while left > 0:
-            var n = external_call["write", Int](Int(1), p.bitcast[NoneType](), left)
+            var n = external_call["__write", Int](Int(1), p.bitcast[NoneType](), left)
             if n <= 0:
                 return  # reader gone
             p = p + n
