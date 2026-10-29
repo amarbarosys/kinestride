@@ -41,7 +41,7 @@ kinestride/bench.sh build MJCF 7   # then: gpu-wait run --timeout 1200 -- kinest
 tools/blender_check.sh            # Blender rig -> blender-mjcf add-on -> check step (under gpu-wait)
 ```
 
-`.venv` comes from `pyproject.toml` (uv: Mojo 1.1.0, MAX 26.6.0, MuJoCo 3.9.0). The MuJoCo oracle is
+`.venv` comes from `pyproject.toml` (uv: Mojo 1.2.0, MAX 26.7.0, MuJoCo 3.9.0). The MuJoCo oracle is
 `~/iTools/science/mj-oracle`.
 
 From another project: `uv pip install -e ~/Projects/mojo/kinestride` (Python: `kinestride.model`), and Mojo builds
