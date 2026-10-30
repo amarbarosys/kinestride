@@ -91,6 +91,11 @@ def ks_npose() abi("C") -> Int:
 
 
 @export
+def ks_nf() abi("C") -> Int:
+    return eng.F
+
+
+@export
 def ks_create(dir: U8P) abi("C") -> Int:
     var n = 0
     while dir[unsafe_offset=n] != 0:

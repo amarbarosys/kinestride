@@ -4,6 +4,7 @@
 # G1: 101 ks_step calls through the .so give the same pose bytes as the engine binary's smooth.bin (1 + 100 launches, K=10).
 # N1: ks_npc (npc-mind base brains + world) for 200 ticks: per-tick NPC x, y, face byte-equal to `npc_live base grid 0 200`
 # (oracle .work/npclive/npc_live0 and weights from kinestride/check.sh npclive; NPC_MIND as there).
+# G2: GDScript (godot/spike/g2_test.gd) through KinestrideWorld / NpcMind writes the G1 parts and N1 trace byte for byte.
 # G3: ks_part (Godot MultiMesh [R | t] per part, geom quaternion applied) at K=1 after 300 steps equals MuJoCo geom_xmat and
 # geom_xpos of the qpos before the last step (pose rows are the kinematics at the start of a step), 1e-5.
 # usage: gpu-wait run --timeout 1200 -- env WAYLAND_DISPLAY=.. DISPLAY=.. XDG_RUNTIME_DIR=.. godot/spike_check.sh
@@ -38,14 +39,9 @@ FL="-I kinestride $(cat $D/sizes.txt) -DFLIES=$F -DSTAGE=7 -DK=$K"
 $M build $FL kinestride/smooth.mojo -o $D/smooth > $D/build.log 2>&1 || { echo "FAIL build: smooth ($D/build.log)"; exit 1; }
 $M build --emit shared-lib $FL kinestride/ks_lib.mojo -o $W/libkinestride.so >> $D/build.log 2>&1 || { echo "FAIL build: ks_lib ($D/build.log)"; exit 1; }
 cc -O2 godot/ks_ping_test.c -ldl -o $W/ks_ping_test && cc -O2 godot/ks_world_test.c -ldl -o $W/ks_world_test \
-  && cc -shared -fPIC -O2 -I $W godot/ks_gdext.c -L$W -lkinestride -Wl,-rpath,'$ORIGIN' -o $W/libks_gdext.so || { echo "FAIL build: C"; exit 1; }
+  || { echo "FAIL build: C"; exit 1; }
 $W/ks_ping_test $W/libkinestride.so | grep -q '^PASS' || { echo "FAIL g0 c host: ks_ping"; exit 1; }
-(cd godot/spike && godot --headless --import >/dev/null 2>&1 || true)
-run() { (cd godot/spike && godot --path . "$@" 2>&1) | grep -q '^PASS ks_ping in godot' || { echo "FAIL g0 godot $*: ks_ping"; exit 1; }; }
-run --headless --quit
-run --rendering-method forward_plus --quit-after 60
-run --rendering-method gl_compatibility --quit-after 60
-start; $W/ks_world_test $W/libkinestride.so $D/ 101 $D/lib_pose.bin 2> $D/g1_time.txt | grep -q '^PASS' || { echo "FAIL g1: ks_world_test"; exit 1; }
+start; PARTS=$D/parts.txt NQ=$(grep -o 'NQ=[0-9]*' $D/sizes.txt | cut -d= -f2) $W/ks_world_test $W/libkinestride.so $D/ 101 $D/lib_pose.bin 2> $D/g1_time.txt | grep -q '^PASS' || { echo "FAIL g1: ks_world_test"; exit 1; }
 start; $D/smooth $D/ > $D/smooth.txt
 cmp -s -n $(( $(.venv/bin/python -c "print(7 * (int('$(grep -o 'NBODY=[0-9]*' $D/sizes.txt | cut -d= -f2)') - 1) * $F * 4)") )) $D/lib_pose.bin $D/smooth.bin \
   || { echo "FAIL g1: .so poses differ from the engine binary after 101 launches"; exit 1; }
@@ -84,4 +80,15 @@ got = np.fromfile(f'{d}/lib_trace.bin', np.int32).reshape(T, 3 * N)
 bad = np.flatnonzero((got != want).any(1))
 sys.exit(f'FAIL n1: tick {bad[0]} first of {bad.size} differing from npc_live' if bad.size else 0)
 PY
-echo "PASS g0 (C, headless, Vulkan, GL) + g1 (101 launches byte-equal; $(grep -o "[0-9.]* us per launch" $D/smooth.txt) at F=$F K=$K) + n1 (200 ticks byte-equal to npc_live) + g3 ($(cat $D/g3.txt))"
+cc -shared -fPIC -O2 -I $W godot/ks_gdext.c -L$W -lkinestride -lks_npc -Wl,-rpath,'$ORIGIN' -o $W/libks_gdext.so || { echo "FAIL build: ks_gdext"; exit 1; }
+(cd godot/spike && godot --headless --import >/dev/null 2>&1 || true)
+run() { (cd godot/spike && godot --path . "$@" 2>&1) | grep -q '^PASS ks_ping in godot' || { echo "FAIL g0 godot $*: ks_ping"; exit 1; }; }
+run --headless --quit
+run --rendering-method forward_plus --quit-after 60
+run --rendering-method gl_compatibility --quit-after 60
+# G2: the same parts and NPC trace from GDScript through KinestrideWorld and NpcMind, byte-equal to the C harnesses
+R=$PWD; start
+(cd godot/spike && godot --headless --path . --script g2_test.gd -- $R/$D/ $R/$D/parts.txt $R/$NL/ $R/$D/ 2>&1) | grep -q '^PASS g2' || { echo "FAIL g2: g2_test.gd"; exit 1; }
+cmp -s $D/g2_parts.bin $D/lib_pose.bin.parts || { echo "FAIL g2: KinestrideWorld.part differs from ks_part"; exit 1; }
+cmp -s $D/g2_trace.bin $T/lib_trace.bin || { echo "FAIL g2: NpcMind trace differs from ks_npc"; exit 1; }
+echo "PASS g0 (C, headless, Vulkan, GL) + g1 (101 launches byte-equal; $(grep -o "[0-9.]* us per launch" $D/smooth.txt) at F=$F K=$K) + n1 (200 ticks byte-equal to npc_live) + g3 ($(cat $D/g3.txt)) + g2 (GDScript parts and NPC trace byte-equal)"
