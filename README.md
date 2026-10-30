@@ -10,6 +10,8 @@ as input, and every stage checked against MuJoCo 3.9.0 with a planted bug that t
 become compile-time constants, so a fly, a spider or a game character each compiles a kernel shaped for it.
 A body built in Blender gets here through the blender-mjcf add-on (parented meshes become bodies, named Empties
 become joints; armatures, masses and actuators are not exported, so those are added to the XML by hand).
+A `.blend` path loads directly (`model.load`, `model.py export|check FILE.blend`): `kinestride/blend.py` runs that
+add-on in headless Blender once per file content and caches the MJCF under `.work/blend/<sha256>/`.
 Export refuses what the engine cannot simulate instead of dropping it: flex,
 flex equalities, coupling across two trees outside Newton + Euler (equalities and tendons across trees: pyramidal only).
 
@@ -38,7 +40,7 @@ tools/assets.sh                    # test bodies into .work/ (fly, flight model,
 kinestride/check.sh step           # one stage vs MuJoCo (under gpu-wait on this machine)
 tools/check_all.sh                 # every stage, one preemptible gpu-wait job each
 kinestride/bench.sh build MJCF 7   # then: gpu-wait run --timeout 1200 -- kinestride/bench.sh run MJCF 7
-tools/blender_check.sh            # Blender rig -> blender-mjcf add-on -> check step (under gpu-wait)
+tools/blender_check.sh            # Blender rig -> add-on -> check step; same rig as .blend direct + cache hit (gpu-wait)
 ```
 
 `.venv` comes from `pyproject.toml` (uv: Mojo 1.2.0, MAX 26.7.0, MuJoCo 3.9.0). The MuJoCo oracle is
