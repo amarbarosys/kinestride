@@ -2284,6 +2284,13 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     undamped = m.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER and (
         not m.dof_damping.any() or m.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_EULERDAMP)
     skip = STALE_RK4 if undamped or m.opt.integrator in (mujoco.mjtIntegrator.mjINT_RK4, mujoco.mjtIntegrator.mjINT_IMPLICIT) else ()
+    if 'qLDiagInv' in want:  # 1/D of L'DL amplifies M's float32 error by kappa = max|M| x max(1/D) (6.2e3 on a Blender humanoid,
+        # 89 kg root vs foot pitch): bar = max(REL, kappa x 2^-27). Measured err / (kappa x 2^-24) is 0.03 on fly and humanoid, so 2^-27
+        # keeps 4x headroom and leaves the fly at 1e-5. Exact M factored in float32 is 7.7e-7: the factor is not the source.
+        kap = float((np.abs(want['M']).reshape(count, -1).max(1) * want['qLDiagInv'].reshape(count, -1).max(1)).max())
+        for f in ('qLD', 'qLDiagInv'):
+            floor[f] = max(floor.get(f, 0), kap * 2.0 ** -27 / fx)
+        print(f'factor conditioning kappa {kap:.3g}: qLD/qLDiagInv bar {max(REL, kap * 2.0 ** -27):.2e}')
     bad += [b for f, g in zip(fields, got) if f not in skip for b in compare({f: (want[f].reshape(len(g), -1), g)}, max(REL, fx * floor.get(f, 0)))]
     if bad:
         print(f'FAIL {len(bad)}/{len(fields)} {stage} fields: {" ".join(bad)}')
