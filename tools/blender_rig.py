@@ -24,6 +24,7 @@ for c, p in ((leg, torso), (root, torso), (knee, leg)):
     w = c.matrix_world.copy(); c.parent = p; c.matrix_world = w
 bpy.context.view_layer.update()
 os.makedirs(out, exist_ok=True)
+bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'rig.blend'))  # kinestride/blend.py input, same scene as rig.xml
 assert bpy.ops.export_scene.mjcf_export(filepath=os.path.join(out, 'rig.xml'), export_format='OBJ') == {'FINISHED'}
 s = open(os.path.join(out, 'rig.xml')).read()
 s = s.replace('  <worldbody>\n', '  <worldbody>\n    <geom name="floor" type="plane" size="5 5 0.1"/>\n', 1)

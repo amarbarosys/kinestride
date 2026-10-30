@@ -23,6 +23,7 @@ import mujoco
 import numpy as np
 
 sys.path.insert(0, str(Path.home() / 'iTools/science/mj-oracle'))
+from kinestride import blend  # noqa: E402  (.blend paths -> cached MJCF)
 from mj_oracle import compare, reference, states, velocities  # noqa: E402  (random states, MuJoCo reference, per-field compare)
 
 INTS = ('body_parentid', 'body_jntadr', 'body_jntnum', 'jnt_type', 'jnt_qposadr', 'geom_bodyid',
@@ -412,6 +413,7 @@ def stones(mjcf, out):
 
 
 def load(mjcf):
+    mjcf = mjcf if isinstance(mjcf, mujoco.MjModel) else blend.resolve(mjcf)
     m = mjcf if isinstance(mjcf, mujoco.MjModel) else mujoco.MjModel.from_xml_path(str(mjcf))
     if not isinstance(mjcf, mujoco.MjModel):
         override(m)
@@ -2292,6 +2294,7 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
 
 if __name__ == '__main__':
     cmd, args = sys.argv[1], sys.argv[2:]
+    args[:1] = map(blend.resolve, args[:1])
     if cmd == 'airborne':
         sys.exit(print(airborne(args[0], args[1], *map(float, args[2:]))))
     if cmd == 'meshes':

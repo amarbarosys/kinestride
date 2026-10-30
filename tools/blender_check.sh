@@ -12,4 +12,11 @@ blender -b --factory-startup -P tools/blender_rig.py -- $P $W/rig > $W/blender.l
   || { echo "FAIL blender export: $W/blender.log"; tail -5 $W/blender.log; exit 1; }
 .venv/bin/python -m kinestride.model check $W/rig/rig_floor.xml $W/chk step > $W/check.log 2>&1 && grep -q '^PASS step' $W/check.log \
   || { echo "FAIL rig step check: $W/check.log"; grep -E '^FAIL' $W/check.log | head -5; exit 1; }
-echo "PASS blender rig ($(grep '^PASS step' $W/check.log))"
+X=$(.venv/bin/python -c "from kinestride import blend; print(blend.resolve('$W/rig/rig.blend'))") \
+  || { echo "FAIL blend resolve: $W/rig/rig.blend"; exit 1; }
+cmp -s "$X" $W/rig/rig.xml || { echo "FAIL blend resolve: $X differs from $W/rig/rig.xml"; diff "$X" $W/rig/rig.xml | head -5; exit 1; }
+.venv/bin/python -m kinestride.model check $W/rig/rig.blend $W/chkb step > $W/checkb.log 2>&1 && grep -q '^PASS step' $W/checkb.log \
+  || { echo "FAIL .blend step check: $W/checkb.log"; grep -E '^FAIL' $W/checkb.log | head -5; exit 1; }
+BL=/nonexistent .venv/bin/python -c "from kinestride import blend; blend.resolve('$W/rig/rig.blend')" \
+  || { echo "FAIL blend cache: second load needed Blender"; exit 1; }
+echo "PASS blender rig ($(grep '^PASS step' $W/check.log)), .blend direct ($(grep '^PASS step' $W/checkb.log)), cache hit"
