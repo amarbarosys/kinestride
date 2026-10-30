@@ -7,10 +7,12 @@
 # G2: GDScript (godot/spike/g2_test.gd) through KinestrideWorld / NpcMind writes the G1 parts and N1 trace byte for byte.
 # G3: ks_part (Godot MultiMesh [R | t] per part, geom quaternion applied) at K=1 after 300 steps equals MuJoCo geom_xmat and
 # geom_xpos of the qpos before the last step (pose rows are the kinematics at the start of a step), 1e-5.
+# Animals stand on a sqrt(F) grid 1.5 m apart (one floor each, drawn as one crowd), qvel ~ N(0, 0.3) seed 0.
+# F=N EXPORT_ONLY=1: export and build the library for N animals into .work/godot/g1_N, nothing else (G4).
 # usage: gpu-wait run --timeout 1200 -- env WAYLAND_DISPLAY=.. DISPLAY=.. XDG_RUNTIME_DIR=.. godot/spike_check.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-W=.work/godot; D=$W/g1; F=1024; K=10; mkdir -p $D
+F=${F:-1024}; K=10; W=.work/godot; D=$W/g1; [ $F = 1024 ] || D=$W/g1_$F; mkdir -p $D
 M=~/iTools/bin/mojo-cached
 [ -s .work/blender/char/character.blend ] || blender -b --factory-startup -P tools/blender_rig.py -- \
   .work/blender/mjcf_export_plugin-3fb51ccfe559f66714601180f8268f8587e442af.py .work/blender/char character > $W/char.log 2>&1 \
@@ -30,12 +32,18 @@ with open(f'{d}/parts.txt', 'w') as f:  # per part: geom-frame half sizes, geom 
         if m.geom_bodyid[g] > 0:
             f.write(' '.join(f'{v:.9g}' for v in [*m.geom_aabb[g][3:], *m.geom_quat[g]]) + '\n')
 q = np.tile(m.qpos0, (F, 1)); q[:, 2] += 0.02
-q.astype(np.float32).T.copy().tofile(f'{d}/start-qpos.bin'); np.zeros((m.nv, F), np.float32).tofile(f'{d}/start-qvel.bin')
+side = int(np.ceil(np.sqrt(F))); q[:, 0] = np.arange(F) % side * 1.5; q[:, 1] = np.arange(F) // side * 1.5  # a crowd on one floor
+v = np.random.default_rng(0).normal(0, 0.3, (F, m.nv)).astype(np.float32)  # each falls its own way
+q.astype(np.float32).T.copy().tofile(f'{d}/start-qpos.bin'); v.T.copy().tofile(f'{d}/start-qvel.bin')
 np.zeros((m.nu, F), np.float32).tofile(f'{d}/ctrl.bin')
 PY
 start() { cp $D/start-qpos.bin $D/qpos.bin; cp $D/start-qvel.bin $D/qvel.bin; }
 [ -s $W/gdextension_interface.h ] || (cd $W && godot --headless --dump-gdextension-interface >/dev/null 2>&1)
 FL="-I kinestride $(cat $D/sizes.txt) -DFLIES=$F -DSTAGE=7 -DK=$K"
+if [ "${EXPORT_ONLY:-0}" = 1 ]; then  # G4: export + library for this F only (godot/g4_bench.sh)
+  $M build --emit shared-lib $FL kinestride/ks_lib.mojo -o $D/libkinestride.so > $D/build.log 2>&1 || { echo "FAIL build: ks_lib ($D/build.log)"; exit 1; }
+  start; echo "PASS export F=$F: $D"; exit 0
+fi
 $M build $FL kinestride/smooth.mojo -o $D/smooth > $D/build.log 2>&1 || { echo "FAIL build: smooth ($D/build.log)"; exit 1; }
 $M build --emit shared-lib $FL kinestride/ks_lib.mojo -o $W/libkinestride.so >> $D/build.log 2>&1 || { echo "FAIL build: ks_lib ($D/build.log)"; exit 1; }
 cc -O2 godot/ks_ping_test.c -ldl -o $W/ks_ping_test && cc -O2 godot/ks_world_test.c -ldl -o $W/ks_world_test \
