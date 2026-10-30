@@ -2,6 +2,8 @@
 # Godot spike gates (docs/plans/GODOT_SPIKE.md). Export: character.blend + floor (plane-mesh pairs only), 1,024 animals at
 # qpos0 + 2 cm, no actuators. G0: ks_ping (a GPU launch) from C, headless Godot, windowed Godot on Vulkan and GL.
 # G1: 101 ks_step calls through the .so give the same pose bytes as the engine binary's smooth.bin (1 + 100 launches, K=10).
+# N1: ks_npc (npc-mind base brains + world) for 200 ticks: per-tick NPC x, y, face byte-equal to `npc_live base grid 0 200`
+# (oracle .work/npclive/npc_live0 and weights from kinestride/check.sh npclive; NPC_MIND as there).
 # usage: gpu-wait run --timeout 1200 -- env WAYLAND_DISPLAY=.. DISPLAY=.. XDG_RUNTIME_DIR=.. godot/spike_check.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -40,4 +42,21 @@ start; $W/ks_world_test $W/libkinestride.so $D/ 101 $D/lib_pose.bin 2> $D/g1_tim
 start; $D/smooth $D/ > $D/smooth.txt
 cmp -s -n $(( $(.venv/bin/python -c "print(7 * (int('$(grep -o 'NBODY=[0-9]*' $D/sizes.txt | cut -d= -f2)') - 1) * $F * 4)") )) $D/lib_pose.bin $D/smooth.bin \
   || { echo "FAIL g1: .so poses differ from the engine binary after 101 launches"; exit 1; }
-echo "PASS g0 (C, headless, Vulkan, GL) + g1 (101 launches byte-equal; $(grep -o "[0-9.]* us per launch" $D/smooth.txt) at F=$F K=$K)"
+NPC=${NPC_MIND:-$HOME/Projects/NN-lanes/kinestride-pin/npc-mind}; NL=.work/npclive; T=$W/n1; mkdir -p $T/inc
+[ -x $NL/npc_live0 ] && [ -s $NL/wout_0.bin ] || { echo "FAIL n1: run kinestride/check.sh npclive first ($NL/npc_live0, wout_0.bin)"; exit 1; }
+ln -sfn "$NPC/world.mojo" $T/inc/npc_world.mojo
+$M build --emit shared-lib -I "$NPC" -I $T/inc kinestride/ks_npc.mojo -o $W/libks_npc.so > $T/build.log 2>&1 || { echo "FAIL build: ks_npc ($T/build.log)"; exit 1; }
+cc -O2 godot/ks_npc_test.c -ldl -o $W/ks_npc_test || { echo "FAIL build: ks_npc_test"; exit 1; }
+$W/ks_npc_test $W/libks_npc.so $NL/ 0 200 $T/lib_trace.bin | grep -q '^PASS' || { echo "FAIL n1: ks_npc_test"; exit 1; }
+[ -s $T/live.bin ] || $NL/npc_live0 $NL/ base grid 0 200 $T/live.bin > /dev/null
+.venv/bin/python -I - $T <<'PY' || exit 1
+import sys, numpy as np
+N, F, T, d = 100, 8, 200, sys.argv[1]
+rec = 3 * N * 4 + 4 * N * 8 + 3 * F * 4 + 3 * F * 4  # npc_live tick record: x,y,face; needs; body pose; grid move
+live = np.fromfile(f'{d}/live.bin', np.uint8)
+want = np.stack([np.frombuffer(live[t * rec:t * rec + 3 * N * 4].tobytes(), np.int32) for t in range(T)])
+got = np.fromfile(f'{d}/lib_trace.bin', np.int32).reshape(T, 3 * N)
+bad = np.flatnonzero((got != want).any(1))
+sys.exit(f'FAIL n1: tick {bad[0]} first of {bad.size} differing from npc_live' if bad.size else 0)
+PY
+echo "PASS g0 (C, headless, Vulkan, GL) + g1 (101 launches byte-equal; $(grep -o "[0-9.]* us per launch" $D/smooth.txt) at F=$F K=$K) + n1 (200 ticks byte-equal to npc_live)"
