@@ -1,0 +1,6 @@
+[configuration]
+entry_symbol = "ks_gdext_init"
+compatibility_minimum = "4.7"
+
+[libraries]
+linux.x86_64 = "res://bin/libks_gdext.so"

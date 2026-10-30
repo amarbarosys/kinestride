@@ -4,3 +4,4 @@ __pycache__/
 *.egg-info/
 MUJOCO_LOG.TXT
 .claude/checkpoints/
+godot/spike/.godot/
