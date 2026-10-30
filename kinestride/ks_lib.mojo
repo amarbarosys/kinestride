@@ -55,8 +55,10 @@ struct World(Movable):
     var v_b: DeviceBuffer[DType.float32]
     var u_b: DeviceBuffer[DType.float32]
     var o_b: DeviceBuffer[DType.float32]
+    var pose: List[Float32]  # host copy of the pose rows, refreshed by ks_fetch, read by ks_part
 
     def __init__(out self, dir: String) raises:
+        self.pose = List[Float32](length=NPOSE, fill=0)
         self.ctx = DeviceContext(0)
         self.mi_b = self.ctx.enqueue_create_buffer[DType.int32](eng.NI)
         self.mf_b = self.ctx.enqueue_create_buffer[DType.float32](eng.NFL)
@@ -140,6 +142,45 @@ def ks_poses(h: Int, dst: F32P) abi("C") -> Int:
     try:
         ref w = world(h)[]
         w.ctx.enqueue_copy(dst, w.o_b.create_sub_buffer[DType.float32](0, NPOSE))
+        w.ctx.synchronize()
+        return 0
+    except:
+        return -1
+
+
+@export
+def ks_fetch(h: Int) abi("C") -> Int:
+    """One GPU -> host copy of the pose rows for this frame's ks_part calls."""
+    return ks_poses(h, world(h)[].pose.unsafe_ptr())
+
+
+@export
+def ks_part(h: Int, p: Int, gq: F32P, dst: F32P) abi("C"):
+    """Godot MultiMesh 3D buffer (12 floats per instance: basis rows with origin, [R | t]) of body p + 1 for every animal,
+    the geom's local quaternion gq (w, x, y, z) applied, from the last ks_fetch. Rows: xpos of bodies 1.., then xquat."""
+    comptime F = eng.F
+    comptime QB = 3 * (eng.NB - 1)
+    ref h_ = world(h)[].pose
+    var gw = gq[unsafe_offset=0]; var gx = gq[unsafe_offset=1]; var gy = gq[unsafe_offset=2]; var gz = gq[unsafe_offset=3]
+    for a in range(F):
+        var bw = h_[(QB + 4 * p) * F + a]; var bx = h_[(QB + 4 * p + 1) * F + a]
+        var by = h_[(QB + 4 * p + 2) * F + a]; var bz = h_[(QB + 4 * p + 3) * F + a]
+        var w = bw * gw - bx * gx - by * gy - bz * gz  # body quat times geom quat
+        var x = bw * gx + bx * gw + by * gz - bz * gy
+        var y = bw * gy - bx * gz + by * gw + bz * gx
+        var z = bw * gz + bx * gy - by * gx + bz * gw
+        var o = dst.unsafe_offset(12 * a)
+        o[0] = 1 - 2 * (y * y + z * z); o[1] = 2 * (x * y - w * z); o[2] = 2 * (x * z + w * y); o[3] = h_[(3 * p) * F + a]
+        o[4] = 2 * (x * y + w * z); o[5] = 1 - 2 * (x * x + z * z); o[6] = 2 * (y * z - w * x); o[7] = h_[(3 * p + 1) * F + a]
+        o[8] = 2 * (x * z - w * y); o[9] = 2 * (y * z + w * x); o[10] = 1 - 2 * (x * x + y * y); o[11] = h_[(3 * p + 2) * F + a]
+
+
+@export
+def ks_qpos(h: Int, dst: F32P) abi("C") -> Int:
+    """qpos rows [NQ][F] (the gate's MuJoCo kinematics input)."""
+    try:
+        ref w = world(h)[]
+        w.ctx.enqueue_copy(dst, w.q_b)
         w.ctx.synchronize()
         return 0
     except:
