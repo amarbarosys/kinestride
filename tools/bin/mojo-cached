@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# mojo with a build cache when the local mojo-cached tool exists, plain `mojo` otherwise (same arguments).
+set -euo pipefail
+c=$HOME/iTools/bin/mojo-cached
+[ -x "$c" ] && exec "$c" "$@"
+exec mojo "$@"

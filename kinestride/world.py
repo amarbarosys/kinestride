@@ -84,7 +84,7 @@ def diff(n=100_000, p=DEFAULT[:8] + (0.5,) + DEFAULT[9:]):
     xy = np.random.default_rng(0).uniform(-2e3, 2e3, (n, 2)).astype(F)
     np.concatenate([xy.ravel(), np.asarray(full(p), F)]).tofile(out / 'in.bin')
     binary = out / 'world'
-    subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('world.mojo')), '-o', str(binary)], check=True)
+    subprocess.run([str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('world.mojo')), '-o', str(binary)], check=True)
     subprocess.run([str(binary), str(out / 'in.bin'), str(out / 'out.bin'), str(n)], check=True)
     got = np.fromfile(out / 'out.bin', F).reshape(n, 3)
     bad = 0

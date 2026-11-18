@@ -12,7 +12,7 @@ if [ "$1" = build ]; then
     W=$X/$k-f32; NC=$(( $(stat -c %s $W/cases.f64) / 320 ))
     for p in f32 f64; do
       FL=""; [ $p = f64 ] && FL="-DCCD64=1"
-      ~/iTools/bin/mojo-cached build $FL -DNCASES=$NC -DNHV=$(( $(stat -c %s $W/hverts.f32) / 12 )) -DNHF=$(( $(stat -c %s $W/hfirst.i32) / 4 )) \
+      tools/bin/mojo-cached build $FL -DNCASES=$NC -DNHV=$(( $(stat -c %s $W/hverts.f32) / 12 )) -DNHF=$(( $(stat -c %s $W/hfirst.i32) / 4 )) \
         -DNHE=$(( $(stat -c %s $W/hedges.i32) / 4 )) -DNHM=$(( $(stat -c %s $W/hmeta.i32) / 12 )) kinestride/convex_gpu.mojo -o $W/cg-$p 2>&1 | grep -A4 error && { echo "FAIL build $k $p"; fail=$((fail+1)); } || true
     done
   done

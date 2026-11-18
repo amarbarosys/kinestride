@@ -27,7 +27,7 @@ def main(mjcf, out, count=64, launches=12):
         raise SystemExit(f'FAIL eqact_rollout: {mjcf} has actuators, mocap bodies or pairs; the rollout writes only eq_active rows')
     binary = out / f'rollout_{count}'
     flags = (out / 'sizes.txt').read_text().split()
-    subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', *flags, '-DEQACT=1', f'-DFLIES={count}', f"-DSTAGE={STAGES['equality'][0]}",
+    subprocess.run([str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached'), 'build', *flags, '-DEQACT=1', f'-DFLIES={count}', f"-DSTAGE={STAGES['equality'][0]}",
                     '-DK=1', f"-DCPU={os.environ.get('CPU', 0)}", str(ENGINE / 'smooth.mojo'), '-o', str(binary)], check=True)
     if os.environ.get('BUILD_ONLY'):
         print(f'built {binary}')

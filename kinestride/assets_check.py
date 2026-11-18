@@ -28,7 +28,7 @@ def write(path, v, f):
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     binary = OUT / 'assets'
-    subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('assets.mojo')), '-o', str(binary)], check=True)
+    subprocess.run([str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('assets.mojo')), '-o', str(binary)], check=True)
     cases = [(f'sphere {n}', ['sphere', str(n)], assets.sphere(n)) for n in range(4)]
     for box, size in ((1, (0.5, 1.5, 0.25)), (0, (1.2, 1.2, 0.5)), (1, (20.0, 0.5, 3.0))):
         cases.append((f'primitive {box} {size}', ['primitive', str(box), *map(repr, size)], assets.primitive(box, np.array(size))))

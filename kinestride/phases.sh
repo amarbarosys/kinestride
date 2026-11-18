@@ -9,7 +9,7 @@ mode=$1; st=${STAGE:-6}; X=.work/bench/$(basename "$2" .xml)-$st${CONVEX:+-conve
 for n in ${NS:-1024 65536}; do
   for k in 1 2 3 4 5 6 7; do
     if [ "$mode" = build ]; then
-      ~/iTools/bin/mojo-cached build $(cat "$X/$n/sizes.txt") -DFLIES=$n -DSTAGE=$st -DWAVE=${WAVE:-0} -DSTOP=$k kinestride/smooth.mojo -o "$X/$n/stop$k" > "$X/$n/stop$k.log" 2>&1 || { echo "FAIL build $n stop $k: $X/$n/stop$k.log"; fail=$((fail+1)); }
+      tools/bin/mojo-cached build $(cat "$X/$n/sizes.txt") -DFLIES=$n -DSTAGE=$st -DWAVE=${WAVE:-0} -DSTOP=$k kinestride/smooth.mojo -o "$X/$n/stop$k" > "$X/$n/stop$k.log" 2>&1 || { echo "FAIL build $n stop $k: $X/$n/stop$k.log"; fail=$((fail+1)); }
     else
       echo -n "stop $k: "; "$X/$n/stop$k" "$X/$n/" || { echo "FAIL run $n stop $k"; fail=$((fail+1)); }
     fi

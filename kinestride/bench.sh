@@ -24,7 +24,7 @@ if not os.path.exists('$d/ctrl.bin'):  # states are seeded: reuse them, the expo
         for i in range(m.nu):
             u[i] = q[:, m.jnt_qposadr[m.actuator_trnid[i, 0]]] if m.actuator_trntype[i] == 0 else 1.0
     u.astype(np.float32).tofile('$d/ctrl.bin')" >/dev/null || { echo "FAIL export $n"; fail=$((fail+1)); continue; }
-    ~/iTools/bin/mojo-cached build $(cat "$d/sizes.txt") -DFLIES=$n -DSTAGE=$stage -DWAVE=${WAVE:-0} kinestride/smooth.mojo -o "$d/step" > "$d/build.log" 2>&1 || { echo "FAIL build $n: $d/build.log"; fail=$((fail+1)); }  # exit code, not output: 1.1 deprecation notes span lines
+    tools/bin/mojo-cached build $(cat "$d/sizes.txt") -DFLIES=$n -DSTAGE=$stage -DWAVE=${WAVE:-0} kinestride/smooth.mojo -o "$d/step" > "$d/build.log" 2>&1 || { echo "FAIL build $n: $d/build.log"; fail=$((fail+1)); }  # exit code, not output: 1.1 deprecation notes span lines
   else
     "$d/step" "$d/" || { echo "FAIL run $n"; fail=$((fail+1)); }
   fi

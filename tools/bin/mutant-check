@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 AMARBARO · amarbaro.org labs. All rights reserved.
+# Does the gate catch a planted bug? Apply one sed edit to FILE, run the gate, restore FILE.
+# PASS (exit 0) when the gate FAILS on the mutant; FAIL when the gate passes or the edit changed nothing.
+# A gate that fails for another reason (build error, crash) is not a catch: the gate's last FAIL/error line is printed,
+# and MUTANT_EXPECT=regex makes the catch count only when the gate output matches it.
+# One mutant per FILE at a time (flock on $MUTANT_LOCK_DIR/<sha of abs path>.lock, default $XDG_RUNTIME_DIR/mutant-check):
+# a second run waits instead of mutating the mutant. Locks live outside the repo: FILE.mutant-lock leaked 42 untracked files.
+# usage: mutant-check FILE 'sed-expression' -- gate command...
+set -euo pipefail
+[ $# -ge 4 ] && [ "$3" = -- ] || { echo "usage: mutant-check FILE 'sed-expression' -- gate command..."; exit 2; }
+file=$1; expr=$2; shift 3
+if [ "${QUICK:-0}" = 1 ]; then echo "QUICK=1: mutant not run ('$expr' in $file): iteration run, the merge gate runs it"; exit 0; fi
+lockdir=${MUTANT_LOCK_DIR:-${XDG_RUNTIME_DIR:-/tmp}/mutant-check}; mkdir -p "$lockdir"
+exec 9>"$lockdir/$(realpath "$file" | sha256sum | cut -c1-16).lock"
+flock -w "${MUTANT_LOCK_WAIT:-3600}" 9 || { echo "FAIL mutant-check: $file locked by another mutant run"; exit 1; }
+for old in "${file}".mutant-orig.*; do  # a killed run (SIGKILL, daemon restart) left its mutant in place: restore first
+  [ -e "$old" ] || continue; cp -p "$old" "$file"; rm -f "$old"; echo "mutant-check: restored $file from leftover $old"
+done
+backup=$(mktemp "${file}.mutant-orig.XXXX")
+cp -p "$file" "$backup"
+log=$(mktemp)
+trap 'cp -p "$backup" "$file"; rm -f "$backup" "$log"' EXIT
+trap 'exit 143' INT TERM HUP  # so EXIT restores the file on a signal too
+sed -i "$expr" "$file"
+if cmp -s "$file" "$backup"; then echo "FAIL mutant-check: '$expr' changed nothing in $file"; exit 1; fi
+echo "mutant: $(diff "$backup" "$file" | grep '^>' | head -1 | cut -c3- | sed 's/^ *//')"
+echo "helper: $(sha256sum "$0" | cut -c1-12)"
+if "$@" >"$log" 2>&1; then echo "FAIL mutant-check: the gate PASSED with the bug planted"; exit 1; fi
+why=$(grep -E 'FAIL|Error|error:|Traceback' "$log" | tail -n 1 | cut -c1-200)
+echo "gate said: ${why:-<no FAIL line; exit non-zero>}"
+if [ -n "${MUTANT_EXPECT:-}" ] && ! grep -qE "$MUTANT_EXPECT" "$log"; then
+  echo "FAIL mutant-check: the gate failed, but not with MUTANT_EXPECT '$MUTANT_EXPECT' (another cause)"; exit 1
+fi
+echo "PASS mutant-check: the gate caught it"

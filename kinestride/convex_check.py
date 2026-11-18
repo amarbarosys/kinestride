@@ -143,7 +143,7 @@ def run(kind, n, prec='f64', bar=1e-9, seed=0, mutant=None, verbose=True):
     hv.tofile(work / 'hverts.f32'); hf.tofile(work / 'hfirst.i32'); he.tofile(work / 'hedges.i32'); hm.tofile(work / 'hmeta.i32')
     exe = work / 'ct'
     flags = ['-DCCD64=1'] if prec == 'f64' else []
-    p = subprocess.run([os.path.expanduser('~/iTools/bin/mojo-cached'), 'build', *flags, 'kinestride/convex_test.mojo', '-o', str(exe)], capture_output=True, text=True)
+    p = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools/bin/mojo-cached'), 'build', *flags, 'kinestride/convex_test.mojo', '-o', str(exe)], capture_output=True, text=True)
     if p.returncode:
         print('FAIL build convex_test:', p.stderr[-2000:])
         return False
@@ -290,7 +290,7 @@ def arena_poses(count, prec='f32'):
     np.array(rows).tofile(work / 'cases.f64')
     hv.tofile(work / 'hverts.f32'); hf.tofile(work / 'hfirst.i32'); he.tofile(work / 'hedges.i32'); hm.tofile(work / 'hmeta.i32')
     exe = work / 'ct'
-    p = subprocess.run([os.path.expanduser('~/iTools/bin/mojo-cached'), 'build', *(['-DCCD64=1'] if prec == 'f64' else []), 'kinestride/convex_test.mojo', '-o', str(exe)], capture_output=True, text=True)
+    p = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools/bin/mojo-cached'), 'build', *(['-DCCD64=1'] if prec == 'f64' else []), 'kinestride/convex_test.mojo', '-o', str(exe)], capture_output=True, text=True)
     if p.returncode or subprocess.run([str(exe), str(work) + '/']).returncode:
         print('FAIL build or run', p.stderr[-800:])
         return False
@@ -350,7 +350,7 @@ def flight_poses(count, prec='f32', seed=0):
     for nm in ('hverts.f32', 'hfirst.i32', 'hedges.i32', 'hmeta.i32'):
         (work / nm).write_bytes(b'')
     exe = work / 'ct'
-    p = subprocess.run([os.path.expanduser('~/iTools/bin/mojo-cached'), 'build', *(['-DCCD64=1'] if prec == 'f64' else []), 'kinestride/convex_test.mojo', '-o', str(exe)], capture_output=True, text=True)
+    p = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools/bin/mojo-cached'), 'build', *(['-DCCD64=1'] if prec == 'f64' else []), 'kinestride/convex_test.mojo', '-o', str(exe)], capture_output=True, text=True)
     if p.returncode or subprocess.run([str(exe), str(work) + '/']).returncode:
         print('FAIL build/run convex_test:', p.stderr[-1500:]); return False
     out = np.fromfile(work / 'out.f64').reshape(len(rows), OW)

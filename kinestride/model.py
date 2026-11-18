@@ -6,7 +6,7 @@ ported stage needs, by their MuJoCo names, concatenated in the order of INTS / F
 sizes.txt as -D flags, so each body type gets its own compiled engine with its loop bounds and array
 offsets as constants (the shiu_worker pattern). A new species is a new MJCF file, not new code.
 
-`check STAGE`: random states from ~/iTools/science/mj-oracle (free joint anywhere, any orientation;
+`check STAGE`: random states from kinestride/mj_oracle.py (free joint anywhere, any orientation;
 hinges and slides inside their ranges), MuJoCo runs the stage in float64, the engine runs it in
 float32 on the GPU, and every output field must agree to REL of its own scale (mj-oracle compare).
 
@@ -22,7 +22,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-sys.path.insert(0, str(Path.home() / 'iTools/science/mj-oracle'))
+sys.path.insert(0, str(Path(__file__).parent))
 from kinestride import blend  # noqa: E402  (.blend paths -> cached MJCF)
 from mj_oracle import compare, reference, states, velocities  # noqa: E402  (random states, MuJoCo reference, per-field compare)
 
@@ -151,7 +151,7 @@ def world_height_grad(x, y, p=WORLD_DEFAULT):
     out.mkdir(parents=True, exist_ok=True)
     if not _WORLD:
         _WORLD.append(out / 'world')
-        subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('world.mojo')),
+        subprocess.run([str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('world.mojo')),
                         '-o', str(_WORLD[0])], check=True)
     x, y = np.broadcast_arrays(np.asarray(x, np.float32), np.asarray(y, np.float32))
     src, dst = out / f'in-{os.getpid()}.bin', out / f'out-{os.getpid()}.bin'
@@ -1734,7 +1734,7 @@ def _assets(*args, mesh=None):
     out.mkdir(parents=True, exist_ok=True)
     if not _ASSETS:
         _ASSETS.append(out / 'assets')
-        subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('assets.mojo')),
+        subprocess.run([str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached'), 'build', str(Path(__file__).with_name('assets.mojo')),
                         '-o', str(_ASSETS[0])], check=True)
     src, dst = out / f'in-{os.getpid()}.bin', out / f'out-{os.getpid()}.bin'
     cmd = [str(_ASSETS[0]), *map(str, args), str(dst)]  # primitive BOX SX SY SZ OUT
@@ -2157,7 +2157,7 @@ def check(mjcf, out, stage, count=64, k=0, oracle=None):
     v.astype(np.float32).T.copy().tofile(out / 'qvel.bin')  # (nv, flies)
     binary = out / f'{stage}_{count}'
     flags = (out / 'sizes.txt').read_text().split() + ([f'-DNXF={nxf}'] if nxf else []) + (['-DEQACT=1'] if eqact else []) + ([f'-DCLIST={clist}'] if clist else [])
-    subprocess.run([str(Path.home() / 'iTools/bin/mojo-cached'), 'build', *flags, f'-DFLIES={count}', f'-DSTAGE={number}', f'-DK={k}', f"-DWAVE={os.environ.get('WAVE', 0)}", f"-DDUMP={os.environ.get('DUMP', 0)}", f"-DCPU={os.environ.get('CPU', 0)}", *os.environ.get('MOJO_DEFS', '').split(), str(ENGINE / 'smooth.mojo'), '-o', str(binary)], check=True)
+    subprocess.run([str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached'), 'build', *flags, f'-DFLIES={count}', f'-DSTAGE={number}', f'-DK={k}', f"-DWAVE={os.environ.get('WAVE', 0)}", f"-DDUMP={os.environ.get('DUMP', 0)}", f"-DCPU={os.environ.get('CPU', 0)}", *os.environ.get('MOJO_DEFS', '').split(), str(ENGINE / 'smooth.mojo'), '-o', str(binary)], check=True)
     if os.environ.get('BUILD_ONLY'):  # tools/check_all.sh phase 1: export and build on the CPU, run nothing
         print(f'built {binary}')
         return

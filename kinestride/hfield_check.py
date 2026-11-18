@@ -63,7 +63,7 @@ def run(n, prec='f64', seed=0, bar=1e-9, verbose=True, func=0):
     np.array([*full(PARAMS), pos1[2]], np.float32).tofile(work / 'hparams.f32')
     hv.tofile(work / 'hverts.f32'); hf.tofile(work / 'hfirst.i32'); he.tofile(work / 'hedges.i32'); hm.tofile(work / 'hmeta.i32')
     exe = work / 'ht'
-    p = subprocess.run([os.path.expanduser('~/iTools/bin/mojo-cached'), 'build', *(['-DCCD64=1'] if prec == 'f64' else []), *([f'-DHF_FUNC={func}'] if func else []), 'kinestride/hfield_test.mojo', '-o', str(exe)], capture_output=True, text=True)
+    p = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools/bin/mojo-cached'), 'build', *(['-DCCD64=1'] if prec == 'f64' else []), *([f'-DHF_FUNC={func}'] if func else []), 'kinestride/hfield_test.mojo', '-o', str(exe)], capture_output=True, text=True)
     if p.returncode or subprocess.run([str(exe), str(work) + '/']).returncode:
         print('FAIL build or run hfield_test', p.stderr[-1500:])
         return False

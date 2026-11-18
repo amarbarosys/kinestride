@@ -14,7 +14,7 @@ MODULE = ROOT / "kinestride/game_state.mojo"
 
 
 def main() -> None:
-    mojo = Path.home() / "iTools/bin/mojo-cached"
+    mojo = Path(__file__).resolve().parents[1] / "tools/bin/mojo-cached"
     build_dir = ROOT / ".work/gamestate-check"
     build_dir.mkdir(parents=True, exist_ok=True)
     binary = build_dir / "game_state"

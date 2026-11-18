@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 F=${F:-1024}; K=10; W=.work/godot; D=$W/g1; [ $F = 1024 ] || D=$W/g1_$F; mkdir -p $D
-M=~/iTools/bin/mojo-cached
+M=tools/bin/mojo-cached
 [ -s .work/blender/char/character.blend ] || blender -b --factory-startup -P tools/blender_rig.py -- \
   .work/blender/mjcf_export_plugin-3fb51ccfe559f66714601180f8268f8587e442af.py .work/blender/char character > $W/char.log 2>&1 \
   || { echo "FAIL blender character: $W/char.log"; exit 1; }

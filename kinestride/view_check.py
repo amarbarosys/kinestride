@@ -15,7 +15,7 @@ from kinestride.model import export, meshes, standing, FEET, ENGINE
 BODY = str(ENGINE.parent / '.work/assets/fly/body.xml')
 OUT = ENGINE.parent / '.work/viewchk'
 CAM = ['0', '-18', '6', '0', '0', '1', '40']
-MOJO = str(Path.home() / 'iTools/bin/mojo-cached')
+MOJO = str(Path(__file__).resolve().parents[1] / 'tools/bin/mojo-cached')
 
 
 def build(n):
