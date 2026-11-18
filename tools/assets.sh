@@ -23,6 +23,10 @@ else
   done
 fi
 C=${CMU:-$HOME/Projects/gpu-media/Blender/.work/mocap}  # CMU mocap (mocap.cs.cmu.edu: copy, modify, redistribute freely)
-for f in 02_05 10_01 55_22 60_01; do copy "$C/$f.bvh" .work/assets/cmu/$f.bvh; done; copy "$C/index.txt" .work/assets/cmu/index.txt
+if [ -d "$C" ]; then
+  for f in 02_05 10_01 55_22 60_01; do copy "$C/$f.bvh" .work/assets/cmu/$f.bvh; done; copy "$C/index.txt" .work/assets/cmu/index.txt
+else
+  echo "SKIP cmu: $C missing (motion stages only; set CMU=dir with 02_05 10_01 55_22 60_01 .bvh from mocap.cs.cmu.edu)"
+fi
 .venv/bin/python -m kinestride.models.spider .work/spider-body > .work/spider-body.log 2>&1 && echo "ok .work/spider-body (generated)" || { echo "FAIL spider body: .work/spider-body.log"; fail=$((fail+1)); }
 [ $fail -eq 0 ] || { echo "FAIL $fail assets"; exit 1; }
