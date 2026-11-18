@@ -1,4 +1,4 @@
-"""Native vision for the spider (~/Projects/science/fly-connectome/docs/plans/SPIDER_BRAIN.md unit 2): one pinhole camera per eye, mounted on the head body,
+"""Native vision for the spider (private note SPIDER_BRAIN unit 2): one pinhole camera per eye, mounted on the head body,
 rendered by render.mojo's own raster pass into a per-animal image, so each animal sees only its own body and its own prey.
 
 Per control step and per eye e: eye_cam builds each animal's camera from the head body's pose (body 1, the prosoma: xpos and

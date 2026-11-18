@@ -1,5 +1,5 @@
 # The imitated base readout of npc-mind seeds 0..S-1 (sweep_gpu.imitate_all: scripted schedule -> SGD fit), for
-# npc_live's base arm (docs/plans/BRAIN.md). Built against npc-mind alone: its world.mojo shares a module name with
+# npc_live's base arm (private note BRAIN). Built against npc-mind alone: its world.mojo shares a module name with
 # kinestride's. usage: npc_imitate S OUT  -> OUT/wout_<s>.bin (float64 A x H per seed); prints the train accuracy.
 # build: mojo build -I <npc-mind> tools/npc_imitate.mojo
 from sweep_gpu import imitate_all

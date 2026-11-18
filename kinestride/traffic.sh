@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DRAM bytes per launch of the engine step from L2->memory request counters (bench.sh build first).
-# Needs, on this box (~/Brain/OS/rocprofiler-install.md): iGPU unbound from amdgpu and card1 at profile_standard,
+# Needs, on this box (private note rocprofiler-install): iGPU unbound from amdgpu and card1 at profile_standard,
 # else rocprofv3 --pmc crashes or every GL2C counter reads 0. Restore `auto` after; ms under profile_standard
 # are not comparable with ms under auto.
 # Reads = sum of GL2C_EA_RDREQ_{32,64,96,128}B x size. Writes = GL2C_EA_WRREQ_64B x 64 + GL2C_MC_WRREQ x 32

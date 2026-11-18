@@ -1,4 +1,4 @@
-"""Gate for kinestride/npc_live.mojo (check.sh npclive, docs/plans/BRAIN.md B4): reads T/run.log and the traces the
+"""Gate for kinestride/npc_live.mojo (check.sh npclive, private note BRAIN B4): reads T/run.log and the traces the
 runner wrote. usage: tools/npclive_check.py T F
   fake == grid        the body-override path changes nothing when the body lands on the grid move (200 ticks, byte-equal)
   calib               walk >= 10 mm forward in 0.8 s; spins turn > 90 degrees each way; standing stays put

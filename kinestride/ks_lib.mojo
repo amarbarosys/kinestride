@@ -1,4 +1,4 @@
-"""Kinestride as a C shared library (docs/plans/GODOT_SPIKE.md).
+"""Kinestride as a C shared library (private note GODOT_SPIKE).
 G0: `ks_ping` proves the Mojo runtime and a GPU launch work inside a host that is not Mojo (a C harness, then Godot): out[i] = i on the device, summed on the host.
 G1: one world per handle, the engine's buffers on the card (viewer.Viewer's engine half, no renderer):
 ks_create(dir) -> handle (0 on error), ks_step(h) = one launch (K steps), ks_poses(h, out) copies the pose rows

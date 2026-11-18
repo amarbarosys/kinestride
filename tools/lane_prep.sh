@@ -9,4 +9,4 @@ for d in assets assets-mojo mujoco-src spider-body; do
   [ -e "$wt/.work/$d" ] || ln -s "$repo/.work/$d" "$wt/.work/$d"
 done
 mkdir -p "$wt/.work/port" "$wt/.work/briefs"
-cp -n "$repo"/.work/port/*.c "$repo"/.work/port/*.fields.md "$wt/.work/port/" 2>/dev/null || true
+cp -n "$repo"/.work/port/*.c "$repo"/.work/port/*private note .fields "$wt/.work/port/" 2>/dev/null || true

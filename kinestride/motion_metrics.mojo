@@ -1,4 +1,4 @@
-"""Motion metrics between a reference clip and a simulated one, both .mclip (docs/plans/MOTION_DATASET.md).
+"""Motion metrics between a reference clip and a simulated one, both .mclip (private note MOTION_DATASET).
 
 pos_err      mean |pS - pR| over frames and bodies (m)
 rot_err      mean geodesic angle of conj(qR) qS, 2 atan2(|v|, |w|) (rad; q and -q are one rotation)

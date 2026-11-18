@@ -1,4 +1,4 @@
-"""npc-mind NPCs with kinestride bodies (docs/plans/BRAIN.md B4): the first F of the world's 100 NPCs walk as spiders.
+"""npc-mind NPCs with kinestride bodies (private note BRAIN B4): the first F of the world's 100 NPCs walk as spiders.
 
 Per tick (TICK_S of body time):
   acts: the scripted schedule or the npc-mind base brain (Brains; the gait shares its DeviceContext; obs from the world)
@@ -65,7 +65,7 @@ def main() raises:
     comptime assert eng.NUC == eng.NU, "the gait writes every ctrl row; the copy back takes the whole buffer"
     comptime assert eng.F <= N
     # Mojo's memory pools reserve 1.28 GiB pinned host + 417 MiB device per process up front (heaptide; Brain
-    # mojo-baro/2026-10-08-leakd-engine-pinned-host.md); every buffer here is made once, so they buy nothing:
+    # private note 2026-10-08-leakd-engine-pinned-host); every buffer here is made once, so they buy nothing:
     # peak RSS 1,580 -> 238 MB (184 MB with one shared context), output byte-equal. Set before the first DeviceContext; an explicit env wins.
     _ = setenv("MODULAR_DEVICE_CONTEXT_HOST_MEMORY_MANAGER_SIZE", "0", False)
     _ = setenv("MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE", "0", False)

@@ -191,5 +191,5 @@ constraints 18.5 %, Newton start + first H 19.4 %, first gradient 2.4 %, Newton 
 Byte counters were not run (the counter recipe unbinds the iGPU, which drives a monitor). Detail: `bench/LANE_UNION_PREREG.md`.
 
 **Union walk (2026-10-26): dead, reverted.** Walking every pair of a wave's union with lanes masked kept results
-byte-identical but ran 16-27 % slower at 65,536 (`docs/plans/UNION_WALK.md`). wavewait: memory wait unchanged, 56 % more
+byte-identical but ran 16-27 % slower at 65,536 (private note `UNION_WALK`). wavewait: memory wait unchanged, 56 % more
 instructions. Kernel today: 128 VGPRs, 0 scratch. The sorted-input gain (-9.3 %) stands; the lever is physical order.

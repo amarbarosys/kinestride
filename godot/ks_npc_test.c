@@ -1,4 +1,4 @@
-// N1 harness (docs/plans/GODOT_SPIKE.md): ks_npc_create(DIR, SEED), TICKS x (ks_npc_tick, ks_npc_state), writes the
+// N1 harness (private plan GODOT_SPIKE): ks_npc_create(DIR, SEED), TICKS x (ks_npc_tick, ks_npc_state), writes the
 // per-tick NPC x, y, face (int32 [N][3]) to OUT; the gate compares it with npc_live's `base grid` trace.
 // usage: cc godot/ks_npc_test.c -ldl -o T && gpu-wait run -- T LIB.so DIR/ SEED TICKS OUT
 #include <dlfcn.h>

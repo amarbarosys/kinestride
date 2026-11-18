@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# G4 (docs/plans/GODOT_SPIKE.md): crowd-mode frame timings in windowed Godot at each F (default 1024 16384 65536).
+# G4 (private note GODOT_SPIKE): crowd-mode frame timings in windowed Godot at each F (default 1024 16384 65536).
 # Each F gets its own export and library (FLIES is compile-time; exports in parallel), swapped in as .work/godot/libkinestride.so
 # for its run, then the 1,024 build is restored. Prints the last "G4 ..." line per F.
 # usage: godot/g4_bench.sh [F...]   (runs its own gpu-wait jobs; needs a Wayland/X session; spike_check.sh run first)

@@ -88,7 +88,7 @@ comptime CITY = get_defined_int["CITY", 0]()  # 1: the ground is city.mojo's end
 comptime LIVING = get_defined_int["LIVING", 0]()  # 1: the ground is living.mojo's baked torus (world.bin after the parts in pf; cam[16:32] the sky)
 comptime LWF = 8 if LIVING else 0  # world floats the layout covers: the header only. The table is as long as world.bin, read through T = pf + LWO
 comptime BIRD0 = PFS * NPART  # where the gull outline starts in pf
-comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in cells per 128 of the world's N (125 x 20 m = 2.5 km at N 128, SCALE.md)
+comptime LIVING_FAR = get_defined_int["LIVING_FAR", 125]()  # view distance in cells per 128 of the world's N (125 x 20 m = 2.5 km at N 128, private note SCALE)
 comptime CITY_DEPTH = get_defined_int["CITY_DEPTH", 0]()  # 1 (gate): each pixel's city hit distance in m as float32 bits, 1e30 on none
 comptime SHADOW = get_defined_int["SHADOW", 2]()  # 0 none, 1 a soft blob under each animal (crowds: no extra pass), 2 shadow map
 comptime AA = get_defined_int["AA", 1]()  # 1: silhouette pixels average 4 analytic sub-rays

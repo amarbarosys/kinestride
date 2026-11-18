@@ -1,4 +1,4 @@
-# Godot spike scene (docs/plans/GODOT_SPIKE.md N3, G4). No user args: idle (the G0 runs).
+# Godot spike scene (private plan GODOT_SPIKE N3, G4). No user args: idle (the G0 runs).
 #   -- crowd DIR/ PARTS [SHOT.png FRAMES]  Kinestride humanoids: one MultiMesh per part, one step + one pose fetch per frame
 #   -- npc DIR/ SEED [SHOT.png FRAMES]     npc-mind NPCs on their 32 x 32 grid: NPCs, food, forges, wolves, trees
 # Prints "G4 ..." timings (ms, mean over 60 frames) in crowd mode.

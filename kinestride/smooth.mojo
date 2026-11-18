@@ -200,7 +200,7 @@ comptime CCV = NFL2  # NCV: opt.ccd_tolerance, heightfield size 0-3 and origin z
 comptime CPN = NFL2 + (6 + 6 * NCP if NCV > 0 else 0)  # PCLIP: per polygon its normal
 comptime CEQF = CPN + (3 * NPOLY if PCLIP else 0)  # per equality: anchors 0 and 1, quaternions 0 and 1, torquescale, solref, solimp, invweight 2, joint data 5, qpos0 2
 comptime CGF = CEQF + EQF * NEQ
-comptime GAME = get_defined_int["GAME", 0]() == 1 and STAGE >= 7  # game layer per step (~/Projects/science/fly-connectome/docs/plans/GAME_LAYER.md): energy, health, stamina, dead
+comptime GAME = get_defined_int["GAME", 0]() == 1 and STAGE >= 7  # game layer per step (private note GAME_LAYER): energy, health, stamina, dead
 comptime SLEEP = get_defined_int["SLEEP", 0]() == 1  # mj_sleep (model.py sleep_block): opt.sleep_tolerance, then dof_length per dof (the velocity weights)
 comptime SLPF = CGF + (NB if GRAVCOMP else 0)
 comptime AFRF = SLPF + (1 + NV if SLEEP else 0)  # NAFRC: jnt_actfrcrange lo, hi per limited joint

@@ -138,7 +138,7 @@ if [ "$stage" = bvh ]; then  # BVH -> canonical character + reference clip (bvh.
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all bvh checks"; exit 0
 fi
-if [ "$stage" = npclive ]; then  # npc-mind brains walking spider bodies (npc_live.mojo, docs/plans/BRAIN.md B4): builds here on
+if [ "$stage" = npclive ]; then  # npc-mind brains walking spider bodies (npc_live.mojo, private note BRAIN B4): builds here on
   # the CPU, then ONE gpu-wait job runs only the binaries (brains and the gait kernel use the card; the engine steps on the host);
   # tools/npclive_check.py reads what they wrote. Run WITHOUT an outer gpu-wait. NPC_MIND: an npc-mind checkout at a commit
   # (default the pinned worktree), FCB: fly-connectome's agent/body_engine (spider_brain.gait)
@@ -652,7 +652,7 @@ if [ "$stage" = condim46 ]; then  # torsional and rolling friction (condim 4 and
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all condim46 checks"; exit 0
 fi
-if [ "$stage" = freefree ]; then  # contact pairs across two free bodies (two floating origins, docs/plans/FREE_FREE.md): models/free_pair.xml,
+if [ "$stage" = freefree ]; then  # contact pairs across two free bodies (two floating origins, private note FREE_FREE): models/free_pair.xml,
   # bodies 2 m from the world origin, a sphere-sphere pair and a mesh-mesh pair (CONVEX=1), nearby states, pyramidal and elliptic, 1e-5;
   # CROSS_MIN: at least 16 of 64 states must carry a cross-tree contact (a pass without one is vacuous)
   S=kinestride/smooth.mojo; FP=kinestride/models/free_pair.xml; mkdir -p $X/ff
@@ -668,7 +668,7 @@ if [ "$stage" = freefree ]; then  # contact pairs across two free bodies (two fl
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all freefree checks"; exit 0
 fi
-if [ "$stage" = pair_cross_animal ]; then  # explicit pairs between two articulated animals in one model (docs/plans/CROSS_ANIMAL.md):
+if [ "$stage" = pair_cross_animal ]; then  # explicit pairs between two articulated animals in one model (private note CROSS_ANIMAL):
   # model.with_pair_animals: spider_test and a copy (prefix b_), gravity 0, the copy pushed into the animal; MuJoCo's rollout picks the
   # touching pairs and 64 clean contact states (contacts in 56/64, no degenerate overlap; STATES=). Primitive pairs (CONVEX=1), both cones;
   # bars from the contact stage's float32 input floor (MuJoCo moves qacc 1.5e-4 on rounded input: stiff contacts between light legs).
@@ -685,7 +685,7 @@ if [ "$stage" = pair_cross_animal ]; then  # explicit pairs between two articula
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all pair_cross_animal checks"; exit 0
 fi
-if [ "$stage" = pgs_full ]; then  # PGS over every row kind and islands across trees (docs/plans/PGS_FULL.md), ENGINE_OPT solver=0, vs MuJoCo per
+if [ "$stage" = pgs_full ]; then  # PGS over every row kind and islands across trees (private note PGS_FULL), ENGINE_OPT solver=0, vs MuJoCo per
   # state with a fresh MjData (PGS stops unconverged: the warmstart and the visiting order are part of the answer). The fly elliptic
   # (model.elliptic, noslip 0); the fly in the arena with convex pairs, noslip 0 (noslip after PGS with convex pairs is refused: one
   # state of 64 moved 0.28 off MuJoCo, open), REL 4e-3: measured 3.1e-3 on qfrc_constraint against a 3.9e-4 input floor, Newton on
@@ -1076,7 +1076,7 @@ if [ "$stage" = rk4 ]; then  # RK4 (mj_RungeKutta) vs MuJoCo with opt.integrator
   [ $fail -eq 0 ] || { echo "FAIL $fail checks"; exit 1; }
   echo "PASS all rk4 checks"; exit 0
 fi
-if [ "$stage" = clist ]; then  # contact list out (-DCLIST=24, unit 1 of docs/plans/GAME_ENGINE.md): per contact geom pair, dist, pos, frame normal, mj_contactForce normal and tangent vs d.contact, fly pyramidal and elliptic
+if [ "$stage" = clist ]; then  # contact list out (-DCLIST=24, unit 1 of private note GAME_ENGINE): per contact geom pair, dist, pos, frame normal, mj_contactForce normal and tangent vs d.contact, fly pyramidal and elliptic
   CLIST=24 $M -m kinestride.model check .work/assets/fly/body.xml $X/clist contact 64 || { echo "FAIL clist pyramidal"; fail=$((fail+1)); }
   E=$($M -c "from kinestride.model import elliptic; print(elliptic('.work/assets/fly/body.xml', 0))")
   CLIST=24 $M -m kinestride.model check $E $X/clist_cone contact 64 || { echo "FAIL clist elliptic"; fail=$((fail+1)); }
@@ -1157,7 +1157,7 @@ if [ "$stage" = solver ]; then  # CG and PGS (mj_solCG, mj_solPGS) vs MuJoCo wit
     done
   done
   # islands: two flies 200 mm apart = two kinematic trees = two MuJoCo islands (own shuffle, own stop). The merged two-fly world differs from its engine
-  # twin by 7e-5 in MuJoCo itself (Newton too: ~/Projects/science/fly-connectome/docs/plans/WORLD.md, open), so this test alone runs at REL=2e-4; PGS over both flies' rows as one block (the island loop run over all rows for every root) must fail here
+  # twin by 7e-5 in MuJoCo itself (Newton too: private note WORLD, open), so this test alone runs at REL=2e-4; PGS over both flies' rows as one block (the island loop run over all rows for every root) must fail here
   FW=$($M -c "from kinestride.model import combine; print(combine('$F', '$F', (200, 0, 0), 'ffworld'))")
   AF=$(env -u ENGINE_OPT $M -m kinestride.model airborne $FW $I/ffworld 0 | tail -1)
   for SV in 1 0; do

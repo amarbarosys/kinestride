@@ -1,6 +1,6 @@
 # Changelog
 
-Full notes in `docs/releases/`. Newest first. Format: `~/iTools/dev/release-note/TEMPLATE.md`.
+Full notes in `docs/releases/`. Newest first. Format: private note `TEMPLATE`.
 
 - [v0.13.0](docs/releases/v0.13.0.md) (2026-10-26): npc-mind brains drive spider bodies in its world (check.sh npclive); 184 MB per world
 - [v0.12.1](docs/releases/v0.12.1.md) (2026-10-26): muscle GPU builds no longer overrun host memory; a 65,536-body run needs 1.99 GB host RAM instead of 9.27 GB

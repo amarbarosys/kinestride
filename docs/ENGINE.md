@@ -8,11 +8,11 @@ Small batches are still slower than the CPU. Every field from kinematics to the 
 MuJoCo within 1e-5 of its scale (the contact force of the unactuated probe within 3 times its float32
 input floor), on the fly and, for the smooth stages, on an 8-leg spider test body, and a planted bug
 fails the gate at each stage. Not yet ported: noslip and the 496 contact pairs other than the feet.
-Our own renderer draws the engine's poses (`RENDERER.md`). Procedure and rules: `.claude/skills/body-engine/SKILL.md`.
+Our own renderer draws the engine's poses (`RENDERER.md`). Procedure and rules: private note `SKILL`.
 
 ## Why a port, when the GPU track is closed
 
-`~/Brain/kinestride/notes/2026-10-03-gpu-body-port.md` closed GPU physics on 2026-10-02: MuJoCo Warp on gfx1100 reached correct physics
+private note `2026-10-03-gpu-body-port` closed GPU physics on 2026-10-02: MuJoCo Warp on gfx1100 reached correct physics
 but stayed below six CPU MuJoCo workers (70,582 steps/s). This is a different bet: MuJoCo's functions
 ported into Mojo for a fixed body, one GPU thread or block per animal, so every rule is ours to change
 (joints, adhesion, new species) and brain and body can share one process.

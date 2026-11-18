@@ -1,6 +1,6 @@
 # Prereg: wave-uniform contact walk (Newton bandwidth lane, 2026-10-26)
 
-Frozen before any GPU run. Context and the CPU evidence: `.work/bandwidth-ideas/REPORT.md`.
+Frozen before any GPU run. Context and the CPU evidence: private note `REPORT`.
 
 ## Hypothesis
 
@@ -28,7 +28,7 @@ and ctrl.bin (mi/mf unchanged) and writes the permutation; a check that un-permu
 ## Metrics
 
 - DRAM read and write bytes per launch: `traffic.sh` (NS=65536), medians of 101 launches, iGPU unbound and
-  profile_standard (`~/Brain/OS/rocprofiler-install.md`), restored to `auto` after.
+  profile_standard (private note `rocprofiler-install`), restored to `auto` after.
 - ms per launch: the bench binary under `auto`, same LACT profile for every arm, order C R S C R S, first run of the
   session discarded (cold clocks), each arm reported as the median of its runs.
 - Newton iterations per animal (mean, max) and line-search evaluations: the bench's own print.

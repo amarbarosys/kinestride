@@ -1,5 +1,5 @@
 """The world's ground as a function, not a table: height and gradient at any (x, y) from 8 parameters, so the engine
-and the renderer evaluate the same endless terrain with no stored heights (~/Projects/science/fly-connectome/docs/plans/WORLD.md). world.py is the
+and the renderer evaluate the same endless terrain with no stored heights (private note WORLD). world.py is the
 numpy twin and the check.
 
 params (16): slope x, slope y, amplitude (mm), wavelength (mm), octaves, seed, lacunarity, gain,

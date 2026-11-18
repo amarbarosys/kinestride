@@ -1,4 +1,4 @@
-// GDExtension entry for Kinestride (docs/plans/GODOT_SPIKE.md). G0: at scene init, ks_ping from inside Godot's process
+// GDExtension entry for Kinestride (private plan GODOT_SPIKE). G0: at scene init, ks_ping from inside Godot's process
 // (prints PASS/FAIL). G2: classes KinestrideWorld (libkinestride.so) and NpcMind (libks_npc.so), RefCounted, one method
 // table and one dispatcher behind both Godot call paths (Variant call and ptrcall).
 // build: cc -shared -fPIC -O2 -I .work/godot godot/ks_gdext.c -L.work/godot -lkinestride -lks_npc -Wl,-rpath,'$ORIGIN' -o .work/godot/libks_gdext.so

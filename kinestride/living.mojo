@@ -1,4 +1,4 @@
-"""Living World as a Kinestride ground: a baked torus (browser-games/living-world, tools/export_bin.mjs, docs/SCALE.md)
+"""Living World as a Kinestride ground: a baked torus (browser-games/living-world, tools/export_bin.mjs, private note SCALE)
 read from one float32 table, so the renderer and the walker evaluate the same surface. living_check.mojo is the gate.
 
 Table: header [N, sea, C, TN]; 5 floats per terrain cell k = j N + i (height | rgb + ao bytes | horizon azimuths 0-3 |
@@ -32,12 +32,12 @@ from std.memory import bitcast
 comptime F4 = SIMD[DType.float32, 4]
 comptime F8 = SIMD[DType.float32, 8]
 comptime BIG = Float32(3.4e38)
-comptime NEAR_M = Float32(get_defined_int["LIVING_NEAR", 150]())  # trees are geometry within this range (SCALE.md section 2)
+comptime NEAR_M = Float32(get_defined_int["LIVING_NEAR", 150]())  # trees are geometry within this range (private note SCALE section 2)
 comptime CLUMP_M = Float32(get_defined_int["LW_CLUMP", 80]())  # crowns are leaf clumps and tiers within this range of the eye, one envelope beyond
 comptime HMAX_M = Float32(40)  # tallest tree, the slot height scale and the ray's skip bound
 comptime HDR = 8  # world.bin header: N, sea, C, TN, max terrain height, then the offsets of cells (= HDR), slots, tail
 comptime CROWN = SIMD[DType.float32, 8](0.085, 0.25, 0.6, 0.13, 0.2, 0.22, 0, 0)
-comptime MESO_OCT = get_defined_int["LW_MESO_OCT", 4]()  # octaves of the 2-20 m layer: wavelengths 20, 10, 5, 2.5 m (SCALE.md section 3); 0 is the flat-world mutant
+comptime MESO_OCT = get_defined_int["LW_MESO_OCT", 4]()  # octaves of the 2-20 m layer: wavelengths 20, 10, 5, 2.5 m (private note SCALE section 3); 0 is the flat-world mutant
 comptime MESO_FLAT = Float32(get_defined_int["LW_MESO_FLAT_CM", 20]()) / 100  # amplitude of the 20 m octave in metres on flat ground
 comptime MESO_STEEP = Float32(get_defined_int["LW_MESO_STEEP_CM", 40]()) / 100  # and on a slope of MESO_S1 or more
 comptime MESO_S0 = Float32(0.08)  # the slope class ramps from flat (this slope) to steep (MESO_S1), rise over run

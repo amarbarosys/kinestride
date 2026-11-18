@@ -4,7 +4,7 @@
 
 Kinestride came out of fly-connectome, a fly body simulation. The body engine was a direct port of MuJoCo's functions into Mojo for a fixed body, one thread or wave per animal (`docs/ENGINE.md`).
 
-Before this repo existed, the GPU track was checked on MuJoCo Warp. On 2026-10-02 that track was closed: MuJoCo Warp on gfx1100 reached correct physics but stayed below six CPU MuJoCo workers at 70,582 steps/s (`docs/ENGINE.md`, citing the Brain note `2026-10-03-gpu-body-port.md`). The engine port started from there.
+Before this repo existed, the GPU track was checked on MuJoCo Warp. On 2026-10-02 that track was closed: MuJoCo Warp on gfx1100 reached correct physics but stayed below six CPU MuJoCo workers at 70,582 steps/s (`docs/ENGINE.md`, citing the Brain note private note `2026-10-03-gpu-body-port`). The engine port started from there.
 
 The baseline for the optimisation work was measured on 2026-10-03 at `53828de`, the S2 probe (`docs/ENGINE_OPT.md`). That commit is cited in the docs but is not among the first commits of this repo. The repo log begins at the root commit `7a119b3`, on 2026-10-09.
 

@@ -1,4 +1,4 @@
-"""npc-mind NPCs as a C shared library for Godot (docs/plans/GODOT_SPIKE.md N1): the base brain arm on the GPU and
+"""npc-mind NPCs as a C shared library for Godot (private note GODOT_SPIKE N1): the base brain arm on the GPU and
 npc-mind's world, ticked exactly as npc_live's `base grid` run (same seed calls, same per-tick u draws), so a C or
 Godot host reproduces that trace byte for byte. ks_npc_think runs the brains alone on observations a game supplies.
 

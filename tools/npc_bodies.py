@@ -1,4 +1,4 @@
-"""Engine files for F spiders standing at the origin facing +x, servos holding the stance (docs/plans/BRAIN.md B4).
+"""Engine files for F spiders standing at the origin facing +x, servos holding the stance (private note BRAIN B4).
 npc_live places and turns each one onto its NPC's tile. Same steps as fly-connectome live.prepare, without the meshes.
 usage: tools/npc_bodies.py DIR F"""
 import sys

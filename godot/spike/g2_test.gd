@@ -1,4 +1,4 @@
-# G2 gate (docs/plans/GODOT_SPIKE.md): KinestrideWorld and NpcMind from GDScript write what the C harnesses write, so
+# G2 gate (private plan GODOT_SPIKE): KinestrideWorld and NpcMind from GDScript write what the C harnesses write, so
 # spike_check.sh compares bytes. usage: godot --headless --path godot/spike --script g2_test.gd -- WORLD_DIR/ PARTS NPC_DIR/ OUT_DIR/
 extends SceneTree
 

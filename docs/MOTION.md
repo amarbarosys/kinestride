@@ -3,7 +3,7 @@
 Any BVH skeleton (CMU, Mixamo-style, any units) is retargeted onto one 21-body, 70 kg character, cleaned of isolated
 spikes, its contact runs planted, and Kinestride tracks it with joint servos and a root assist, 64 animals at a time,
 matching MuJoCo's own run of the same loop to 1.2e-7 m mean body position over 800 frames (`check.sh track`). Ideas observed in Godot 4.7.2
-and rebuilt clean-room: `provenance/motion-godot.md`. Plan: `plans/MOTION_DATASET.md`.
+and rebuilt clean-room: private note `motion-godot`. Plan: private note `MOTION_DATASET`.
 
 ```
 bvh mjcf OUT.xml                 the one character   check.sh bvh    (CPU)

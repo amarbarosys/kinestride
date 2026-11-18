@@ -1,4 +1,4 @@
-"""Grid intent -> gait drives for a body that carries an npc-mind brain (docs/plans/BRAIN.md B3). Host only: a few numbers
+"""Grid intent -> gait drives for a body that carries an npc-mind brain (private note BRAIN B3). Host only: a few numbers
 per animal per control step.
 
 The npc-mind world says where its NPC should be after a tick: a tile (x east, y south) and a facing (0 N, 1 E, 2 S, 3 W).

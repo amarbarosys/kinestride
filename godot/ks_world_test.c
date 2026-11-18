@@ -1,4 +1,4 @@
-// G1 harness (docs/plans/GODOT_SPIKE.md): ks_create(DIR), STEPS x ks_step, ks_poses to OUT (float32 rows, [row][animal]),
+// G1 harness (private plan GODOT_SPIKE): ks_create(DIR), STEPS x ks_step, ks_poses to OUT (float32 rows, [row][animal]),
 // timing per call on stderr. The gate compares OUT with the engine binary's smooth.bin pose rows from the same DIR.
 // PARTS=DIR/parts.txt also writes OUT.parts (ks_part of every part, [part][animal][12]) and OUT.qpos (ks_qpos, [NQ][F]).
 // usage: cc godot/ks_world_test.c -ldl -o T && gpu-wait run -- T LIB.so DIR/ STEPS OUT

@@ -2,7 +2,7 @@
 
 ## Context
 Procedural (Minecraft-style, seeded noise, chunked) worlds need non-flat ground. Engine contacts are plane-mesh only
-(`~/Projects/science/fly-connectome/docs/CAPABILITIES.md` line 11 at the time, "non-plane contacts missing"). Exact MuJoCo parity (`mjc_ConvexHField`) needs a GJK+EPA
+(private note `CAPABILITIES` line 11 at the time, "non-plane contacts missing"). Exact MuJoCo parity (`mjc_ConvexHField`) needs a GJK+EPA
 port (`mjc_ccd`, XL, divergent waves). Chosen: **tangent plane**. Per mesh-ground pair, sample the heightfield under
 the mesh, build the local plane, and run the EXISTING `contacts()` plane-mesh path unchanged. Minimum LOC, near-zero
 per-step cost. Known limit: wrong where terrain bends inside one foot (cell size << foot); generator keeps terrain

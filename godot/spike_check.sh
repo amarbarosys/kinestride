@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Godot spike gates (docs/plans/GODOT_SPIKE.md). Export: character.blend + floor (plane-mesh pairs only), 1,024 animals at
+# Godot spike gates (private note GODOT_SPIKE). Export: character.blend + floor (plane-mesh pairs only), 1,024 animals at
 # qpos0 + 2 cm, no actuators. G0: ks_ping (a GPU launch) from C, headless Godot, windowed Godot on Vulkan and GL.
 # G1: 101 ks_step calls through the .so give the same pose bytes as the engine binary's smooth.bin (1 + 100 launches, K=10).
 # N1: ks_npc (npc-mind base brains + world) for 200 ticks: per-tick NPC x, y, face byte-equal to `npc_live base grid 0 200`

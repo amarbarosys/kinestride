@@ -1,4 +1,4 @@
-// G0 harness (docs/plans/GODOT_SPIKE.md): dlopen libkinestride.so from a non-Mojo host, call ks_ping, expect N(N-1)/2.
+// G0 harness (private plan GODOT_SPIKE): dlopen libkinestride.so from a non-Mojo host, call ks_ping, expect N(N-1)/2.
 // usage: cc godot/ks_ping_test.c -o .work/godot/ks_ping_test && gpu-wait run -- .work/godot/ks_ping_test LIB.so
 #include <dlfcn.h>
 #include <stdio.h>
