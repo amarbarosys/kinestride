@@ -4,65 +4,89 @@
 on one AMD RX 7900 XTX. Kinestride is batched GPU physics in Mojo: one GPU thread per body, any MuJoCo MJCF model
 as input, and every stage checked against MuJoCo 3.9.0 with a planted bug that the check must catch.
 
-## Any MJCF model becomes its own binary
+## What it is
 
-`kinestride/model.py export` flattens a MuJoCo model into two tables (`mi.bin` int32, `mf.bin` float32). The sizes
-become compile-time constants, so a fly, a spider or a game character each compiles a kernel shaped for it.
-A body built in Blender gets here through the blender-mjcf add-on (parented meshes become bodies, named Empties
-become joints; armatures, masses and actuators are not exported, so those are added to the XML by hand).
-A `.blend` path loads directly (`model.load`, `model.py export|check FILE.blend`): `kinestride/blend.py` runs that
-add-on in headless Blender once per file content and caches the MJCF under `.work/blend/<sha256>/`.
-Export refuses what the engine cannot simulate instead of dropping it: flex,
-flex equalities, coupling across two trees outside Newton + Euler (equalities and tendons across trees: pyramidal only).
+- **Batched.** One GPU thread per body. A launch steps the whole crowd: 66.7 ms at 65,536 bodies
+  (`docs/releases/v0.13.0.md`).
+- **Any MJCF model.** `kinestride/model.py export` flattens a MuJoCo model into two tables (`mi.bin` int32,
+  `mf.bin` float32). The sizes become compile-time constants, so each body compiles a kernel shaped for it.
+  A `.blend` path loads directly through the blender-mjcf add-on (`kinestride/blend.py`, cached under `.work/`).
+  Export refuses what the engine cannot simulate instead of dropping it.
+- **Checked.** Each ported MuJoCo function is a file named after its original and cites the source it follows.
+  Each output field must agree with MuJoCo within 1e-5 of its scale on random states, and a planted mutant of
+  the function must fail the gate.
 
 | area | ported and checked |
 |---|---|
 | dynamics | kinematics, composite inertia, sparse mass-matrix factor, RNE bias, springs, dampers, gravity compensation |
 | integrators | Euler, RK4, implicit, implicitfast (+ midpoint for free bodies) |
-| contacts | plane and heightfield vs mesh; sphere, capsule, ellipsoid, cylinder; box and convex meshes, mesh vs mesh (GJK + EPA, multi-contact); automatic body-body pairs; pyramidal and elliptic cones; noslip |
-| constraints | Newton (default), CG, PGS; connect, weld, joint equalities; joint and tendon limits; standard and direct solref on contact, equality and limit rows; equalities switched on and off per animal at run time (eq_active); pairs, tendons and equalities across trees |
-| actuators | joint servos, fixed and spatial tendons, adhesion; joint-level force limits (actuatorfrcrange) |
-| more | push input (xfrc_applied), fluid forces, per-body sleep, mocap bodies, a game layer (energy, health, stamina), a ray-marching renderer with eye cameras |
+| contacts | plane and heightfield vs mesh; sphere, capsule, ellipsoid, cylinder; box and convex meshes, mesh vs mesh (GJK + EPA, multi-contact); automatic body-body pairs; pyramidal and elliptic cones |
+| constraints | Newton (default), CG, PGS; connect, weld, joint equalities; joint and tendon limits; solref on contact, equality and limit rows; equalities switched on and off per body at run time |
+| actuators | joint servos, fixed and spatial tendons, adhesion; joint-level force limits |
+| more | push input, per-body sleep, mocap bodies, a ray-marching renderer with eye cameras |
 
-## The step is limited by memory bandwidth, not arithmetic
+Not yet ported: noslip, and contact pairs beyond those listed above. The stage-by-stage status is in
+`docs/ENGINE_REFERENCE.md`; the stable surface (files, rows, step) is `docs/API.md`.
 
-At 65,536 bodies a launch reads 40 GB and writes 16 GB of DRAM, about 87 % of the card's bandwidth. Each body
-reads 611 KB per step against a 141 KB footprint, because the Newton solver re-reads its factors and vectors every
-iteration (`docs/ENGINE_OPT.md`, byte budget). Full implicit integration costs 85 KB of scratch per body
-(5.6 GB at 65,536), so it is not yet a mode for large crowds.
+## Quick start
 
-## Running it
+Requirements: Linux, an AMD RDNA3 GPU with ROCm (gfx1100 is the only target run so far), and the Python
+environment from `pyproject.toml` (uv: Mojo 1.2.0, MAX 26.7.0, MuJoCo 3.9.0).
 
 ```
-tools/smoke.sh                     # CPU only, no assets: doc links + export + full-step build (29 s cold)
-python -m kinestride.assets_check  # CPU: assets.mojo (world-part meshes) vs its oracle assets.py, 10 cases exact
-tools/assets.sh                    # test bodies into .work/ (fly, flight model, spider; kept out of git)
-kinestride/check.sh step           # one stage vs MuJoCo (under gpu-wait on this machine)
-tools/check_all.sh                 # every stage, one preemptible gpu-wait job each
-kinestride/bench.sh build MJCF 7   # then: gpu-wait run --timeout 1200 -- kinestride/bench.sh run MJCF 7
-tools/blender_check.sh            # Blender rig -> add-on -> check step; same rig as .blend direct + cache hit (gpu-wait)
+tools/smoke.sh                     # CPU only, no assets: doc links, export, full-step build
+kinestride/check.sh step           # GPU: one stage against MuJoCo, plus its planted mutant
+tools/assets.sh                    # test bodies into .work/ (not in git)
+tools/check_all.sh                 # GPU: every stage, one job each
 ```
 
-`.venv` comes from `pyproject.toml` (uv: Mojo 1.2.0, MAX 26.7.0, MuJoCo 3.9.0). The MuJoCo oracle is
-`~/iTools/science/mj-oracle`.
+`check.sh` takes `.work/check.lock` per worktree, so run GPU stages one at a time. A passing stage prints
+`PASS`; a failing one prints `FAIL <step>` and exits non-zero.
 
-From another project: `uv pip install -e ~/Projects/mojo/kinestride` (Python: `kinestride.model`), and Mojo builds
-with `-I ~/Projects/mojo/kinestride/kinestride` (`import smooth`, `import render`, `import world`). fly-connectome is
-the first consumer: its connectome brains, live viewer and game scenes drive Kinestride bodies.
+From another project: `uv pip install -e /path/to/kinestride` (Python: `kinestride.model`), and Mojo builds
+with `-I /path/to/kinestride/kinestride` (`import smooth`, `import render`, `import world`).
 
-## Watching a body live
+## Benchmarks
 
-`kinestride/viewer.mojo` holds the live loop's engine and renderer (one DeviceContext, poses rendered without a copy);
-`kinestride/view.mojo` runs it with no brain, ctrl held, frames to stdout for mpv. An app keeps its own loop and calls
-`Viewer.step` and `Viewer.frame` around its own controller: fly-connectome's `live.mojo` drives brains this way
-(`check.sh view`: the loop equals smooth and render byte for byte).
+`kinestride/bench.sh build MJCF 7`, then `kinestride/bench.sh run MJCF 7` on the GPU. Batch sizes are 1,024,
+16,384 and 65,536 bodies. Stage 5 is the contact-free step; stage 6 adds feet, contacts and Newton. Run
+`check.sh` first: a speed number from an unchecked build is not reported.
 
-## What is not here yet
+| figure | value | source |
+|---|---|---|
+| 65,536 bodies, full step, one launch | 66.7 ms | `docs/releases/v0.13.0.md` |
+| 65,536 bodies, actuated fly (6 feet, 44 servos, 6 adhesion pads) | 0.64 us per body-step | `docs/ENGINE.md` |
+| same workload, MuJoCo on six CPU workers | 22 times slower | `docs/ENGINE.md` |
 
-A window and input for game use (fly-connectome has one, through mojo-imkit); the engine has only run on gfx1100.
+The optimisation history, with the byte budget and the rejected steps, is in `docs/ENGINE_OPT.md`.
 
-Reference: `docs/API.md` (the stable surface: files, rows, step), `docs/ENGINE_REFERENCE.md` (stage by stage), `docs/ENGINE_OPT.md` (performance history),
-`docs/RENDERER.md`, `docs/HFIELD_CONTACT.md`, port queue `kinestride/port_queue.tsv`. License notes: `NOTICE`.
+## How it compares to MuJoCo
 
-Port routine (porting a MuJoCo stage, gates, timing): skill `.claude/skills/body-engine/SKILL.md`.
-Status and next steps: board `~/Brain/kinestride/whiteboard.md` (symlink `.claude/checkpoints/whiteboard.md`, gitignored).
+MuJoCo is the reference and the oracle. Kinestride ports its functions one at a time and checks each against it.
+Scope, speed and when each one fits are in [docs/VS_MUJOCO.md](docs/VS_MUJOCO.md).
+
+## Where it came from
+
+Kinestride began as the GPU body engine of an insect-brain project. The decision to port MuJoCo's functions
+by hand, after an earlier GPU route was closed, is in [docs/HISTORY.md](docs/HISTORY.md).
+
+## Layout
+
+```
+kinestride/   engine: one .mojo file per MuJoCo function, model.py (export), check.sh, bench.sh
+kinestride/models/   test MJCFs kept in git (spider_test.xml); fly and other bodies come from tools/assets.sh
+tools/        CPU smoke, assets, check_all, Blender rig, dataset helpers
+docs/         API, engine reference, optimisation history, renderer, releases
+skills/       agent skill for porting a stage (body-engine)
+```
+
+What the engine runs, and what it refuses, is listed in [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
+
+## For coding agents
+
+Porting a MuJoCo stage, writing a stage gate, or timing the engine: read `skills/body-engine/SKILL.md`.
+Claude Code: `ln -s "$PWD/skills/body-engine" .claude/skills/body-engine`.
+
+## License
+
+Apache-2.0, see `LICENSE`. Portions are translated from MuJoCo (Apache-2.0, DeepMind); see `NOTICE`.
