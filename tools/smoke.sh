@@ -5,6 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tools/doclinks.sh
+mkdir -p .work  # fresh clones have none
 BUILD_ONLY=1 .venv/bin/python -m kinestride.model check kinestride/models/spider_test.xml .work/smoke step 64 > .work/smoke.log 2>&1 \
   || { echo "FAIL smoke build: .work/smoke.log"; tail -5 .work/smoke.log; exit 1; }
 echo "PASS smoke ($(tail -1 .work/smoke.log))"
