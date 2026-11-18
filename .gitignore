@@ -5,3 +5,6 @@ __pycache__/
 MUJOCO_LOG.TXT
 .claude/checkpoints/
 godot/spike/.godot/
+exchange/
+.claude/skills/
+*.uid
