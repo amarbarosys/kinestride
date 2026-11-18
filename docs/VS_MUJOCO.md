@@ -4,7 +4,7 @@ Where the engine is ahead of MuJoCo on the CPU, why, and where it is not. Figure
 
 ## Where it is better
 
-**Batched GPU throughput.** The actuated fly, standing on six feet with 44 servos and 6 adhesion pads, runs at 0.64 us per animal-step for 65,536 animals (`dd2f42c`, `docs/ENGINE.md`). That is 22 times MuJoCo on six CPU workers (`docs/ENGINE.md`). The 22x follows from MuJoCo's 70,582 steps/s (`docs/ENGINE_OPT.md`): 65,536 animal-steps take about 928 ms on that CPU, against about 42 ms on the card. Equivalent rate: 1 / 0.64 us, about 1.56M animal-steps/s (derived from the same figure).
+**Batched GPU throughput.** The actuated fly, standing on six feet with 44 servos and 6 adhesion pads, runs at 0.64 us per animal-step for 65,536 animals (`7e66ef6`, `docs/ENGINE.md`). That is 22 times MuJoCo on six CPU workers (`docs/ENGINE.md`). The 22x follows from MuJoCo's 70,582 steps/s (`docs/ENGINE_OPT.md`): 65,536 animal-steps take about 928 ms on that CPU, against about 42 ms on the card. Equivalent rate: 1 / 0.64 us, about 1.56M animal-steps/s (derived from the same figure).
 
 **Measured 2026-11-18** (`kinestride/bench.sh run body.xml 7`, actuated fly, RX 7900 XTX, K=1; MuJoCo figure 70,582 steps/s on six CPU workers from 2026-10-02, not re-run):
 
@@ -14,10 +14,10 @@ Where the engine is ahead of MuJoCo on the CPU, why, and where it is not. Figure
 | 16,384 | 38.6 ms | 424,841 | 6.0x |
 | 65,536 | 84.7 ms | 773,606 | 11.0x |
 
-The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 now measures 1.29 us at 65,536, the same at kinestride's first commit `7a119b3` (85.2 ms vs 84.7 ms per launch), so the current number is 11x. Likely cause, not bisected: all 55 plane-mesh floor pairs (`00a58e6`) replaced the 6 foot pairs. The engine is behind MuJoCo at 1,024 animals.
+The 0.64 us / 22x figure above is from `7e66ef6` (feet-only contacts); stage 7 now measures 1.29 us at 65,536, the same at kinestride's first commit `7a119b3` (85.2 ms vs 84.7 ms per launch), so the current number is 11x. Likely cause, not bisected: all 55 plane-mesh floor pairs (`3f1b1d5`) replaced the 6 foot pairs. The engine is behind MuJoCo at 1,024 animals.
 
 **Determinism.** Two properties are measured:
-- K steps per launch match K single-step launches byte for byte: K=10 is byte-equal to 10 x K=1 (`c5c478c`, `docs/ENGINE.md`).
+- K steps per launch match K single-step launches byte for byte: K=10 is byte-equal to 10 x K=1 (`8e5654f`, `docs/ENGINE.md`).
 - The optimisation rule requires two runs to be byte-equal (`docs/ENGINE_OPT.md`, Targets). Those are the rules, not a separate measurement.
 
 **Every rule is ours to change.** MuJoCo's functions are ported, so joints, adhesion and new species are engine code and not a MuJoCo option (`docs/ENGINE.md`, Why a port). A new species is a new MJCF file and an export, not new engine code (`docs/ENGINE.md`, Design).
@@ -34,7 +34,7 @@ The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 n
 
 - **Hardware.** Only gfx1100 has been measured (`docs/ENGINE.md` measurements and `docs/ENGINE_OPT.md` use the card). Other GPUs are untested.
 - **Small batches.** See above: at 1,024 animals the engine runs 0.65x MuJoCo on the CPU; the crossover lies between 1,024 and 16,384 (not measured).
-- **Coverage.** Noslip and the contact pairs other than the feet are not ported (`docs/ENGINE.md`). The spider stage is partial (`615d2af`; qfrc_constraint 1.5e-05 to 5.2e-05, cause open).
+- **Coverage.** Noslip and the contact pairs other than the feet are not ported (`docs/ENGINE.md`). The spider stage is partial (`bbe2934`; qfrc_constraint 1.5e-05 to 5.2e-05, cause open).
 - **Flight model.** Its automatic body-body contacts need capsule, cylinder and sphere supports, which are missing (`docs/CONVEX_CONTACT.md`).
 - **Plane-capsule.** Not ported (`docs/MOTION.md`, Bones are convex meshes).
 - **Float32 limits.** Some checks cannot reach 1e-5 in float32. Measured bars are used instead: arena REL 3e-3, convexstep REL 1e-3, terrain_exact REL 4e-4 (`docs/CONVEX_CONTACT.md`). Box-mesh contact counts show 1.5% mismatches against MuJoCo in float32 (`docs/CONVEX_CONTACT.md`).

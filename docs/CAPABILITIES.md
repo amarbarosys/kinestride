@@ -19,14 +19,14 @@ Each model becomes two tables (`mi.bin`, `mf.bin`) and its own binary. Export re
 
 | Stage | MuJoCo 3.9.0 function | Status (commit) |
 |---|---|---|
-| S1.1 to S1.5 | kinematics, comPos/crb, factorM, comVel/passive/rne, Euler | PASS, `ccd9695`, `019783a`, `83469eb`, `fc0abdb` |
-| S2 probe | plane-mesh feet (6 pairs), pyramidal cone, Newton solve | PASS, `01c4c57` (2.0 us per step) |
-| S3 | transmission, actuators: 44 joint servos, 6 adhesion bodies | PASS, `dd2f42c` (0.64 us per step at 65,536) |
-| Floor | all 55 plane-mesh pairs | PASS, `00a58e6` |
-| Loop | K steps per launch, state kept on the card | PASS, `c5c478c` (K=10 byte-equal to 10 x K=1) |
-| Origin | floating origin per animal | PASS, `a03e700` |
-| Cube | 40 mm cube of 6 planes, 330 pairs | PASS, `5acde4e` |
-| Spider | generated salticid body | PARTIAL, `615d2af` (contact/actuated qfrc_constraint 1.5e-05 to 5.2e-05; cause open) |
+| S1.1 to S1.5 | kinematics, comPos/crb, factorM, comVel/passive/rne, Euler | PASS, `ed60339`, `20e8b51`, `798bc33`, `8b87dbc` |
+| S2 probe | plane-mesh feet (6 pairs), pyramidal cone, Newton solve | PASS, `53828de` (2.0 us per step) |
+| S3 | transmission, actuators: 44 joint servos, 6 adhesion bodies | PASS, `7e66ef6` (0.64 us per step at 65,536) |
+| Floor | all 55 plane-mesh pairs | PASS, `3f1b1d5` |
+| Loop | K steps per launch, state kept on the card | PASS, `8e5654f` (K=10 byte-equal to 10 x K=1) |
+| Origin | floating origin per animal | PASS, `670866c` |
+| Cube | 40 mm cube of 6 planes, 330 pairs | PASS, `e1731b9` |
+| Spider | generated salticid body | PARTIAL, `bbe2934` (contact/actuated qfrc_constraint 1.5e-05 to 5.2e-05; cause open) |
 | Equality | connect, weld, joint, tendon equalities, runtime `eq_active` | PASS, `equality`, `equality_contact` (see `docs/ENGINE.md`; `9d593b6`, `e7260c2`) |
 | Mocap | mocap bodies | PASS, `mocap` (`docs/ENGINE.md`) |
 | Gravcomp | `mj_gravcomp`, actuator-level gravcomp | PASS, `gravcomp` (`docs/ENGINE.md`) |
@@ -36,7 +36,7 @@ Tolerances: each field is checked against MuJoCo within 1e-5 of its scale; where
 
 ## Solvers
 
-- Newton with the MuJoCo iteration count (S2 probe, `01c4c57`). The float32 stopping rules that cut line-search cost are in `docs/ENGINE_OPT.md` (Step 0, `32d27c2`).
+- Newton with the MuJoCo iteration count (S2 probe, `53828de`). The float32 stopping rules that cut line-search cost are in `docs/ENGINE_OPT.md` (Step 0, `bb9596c`).
 - PGS over equality, friction-loss, limit, elliptic and convex rows, with islands across trees (`2e87a24`).
 - CG over the same rows (`eafad87`).
 - Elliptic cone under RK4 and implicitfast (`3a897e3`).
@@ -46,7 +46,7 @@ Tolerances: each field is checked against MuJoCo within 1e-5 of its scale; where
 
 ## Contacts
 
-- Plane-mesh feet (S2 probe, `01c4c57`).
+- Plane-mesh feet (S2 probe, `53828de`).
 - Margin-0 box-mesh and mesh-mesh contacts by MuJoCo's polygon clipping (`2f552a2`). Mesh-mesh through `mjc_Convex` (`05d8954`).
 - Box-mesh and ellipsoid-mesh through the native GJK and EPA, with the perturbation search for 0, 1 or 5 contacts (`docs/CONVEX_CONTACT.md`).
 - Exact heightfield contact, one GJK and EPA per cell prism, up to 50 contacts per pair (`docs/CONVEX_CONTACT.md`). A tangent-plane approximation was planned first (`docs/HFIELD_CONTACT.md`); the exact path is the one the convex doc records as measured.
@@ -56,7 +56,7 @@ Tolerances: each field is checked against MuJoCo within 1e-5 of its scale; where
 
 ## Batch sizes and throughput
 
-Per-launch numbers from the engine docs and optimisation baseline (`docs/ENGINE_OPT.md`, baseline at `01c4c57`, 2026-10-03):
+Per-launch numbers from the engine docs and optimisation baseline (`docs/ENGINE_OPT.md`, baseline at `53828de`, 2026-10-03):
 
 | Batch | Per launch | Per animal-step | vs MuJoCo CPU (70,582 steps/s) |
 |---|---:|---:|---:|
@@ -64,7 +64,7 @@ Per-launch numbers from the engine docs and optimisation baseline (`docs/ENGINE_
 | 16,384 | 83.4 ms | 5.09 us | 2.8x |
 | 65,536 | 133 ms | 2.03 us | 7.0x |
 
-Later: the S3 stage runs 0.64 us per animal-step at 65,536 (`dd2f42c`, `docs/ENGINE.md`). Step 0 of the optimisation plan cut the 1,024-animal launch from 32.1 ms to 18.6 ms (`32d27c2`). Re-measured 2026-11-18 at stage 7: 1,024 animals 22.3 ms per launch (0.65x MuJoCo), 16,384 38.6 ms (6.0x), 65,536 84.7 ms, 1.29 us per animal-step (11.0x); table in `docs/VS_MUJOCO.md`.
+Later: the S3 stage runs 0.64 us per animal-step at 65,536 (`7e66ef6`, `docs/ENGINE.md`). Step 0 of the optimisation plan cut the 1,024-animal launch from 32.1 ms to 18.6 ms (`bb9596c`). Re-measured 2026-11-18 at stage 7: 1,024 animals 22.3 ms per launch (0.65x MuJoCo), 16,384 38.6 ms (6.0x), 65,536 84.7 ms, 1.29 us per animal-step (11.0x); table in `docs/VS_MUJOCO.md`.
 
 The Godot crowd frame timings at 1k, 16k and 65k are in `2884ab4` (no numbers are copied here).
 

@@ -9,7 +9,7 @@ visibility buffer and the finished image.
 
 ## Status
 
-Steps 1 to 5 PASS (`0ad21a9`, `905d2bc`, `86fb4d2`): mesh tables (1.1 MB), 64-bit atomic min (10M writes
+Steps 1 to 5 PASS (`1c6ccb8`, `32a030d`, `fbc1413`): mesh tables (1.1 MB), 64-bit atomic min (10M writes
 0.54 ms), raster and shade, mpv/ffmpeg streaming, silhouette IoU against mujoco.Renderer 0.995-0.998 in
 three views from the engine's own pose, 10,000-frame leak gate (fds 7/7, VRAM flat). One fly at 960 x 540:
 0.57-1.0 ms per frame including the copy to host. VRAM: 152 MB with the MAX pool off (it was 22.7 GB
@@ -76,7 +76,7 @@ of once per overlapping triangle.
 - Every device buffer, the pinned ring and the output pipe are created once, before the first frame,
   sized by the resolution and the model; a frame allocates nothing on host or device.
 - One process owns the pipe; the viewer reads the other end, and the renderer exits on EOF or a broken
-  pipe. No `input()`: the stdin fd leak of 2026-10-03 (`1a07a08`) is the scar.
+  pipe. No `input()`: the stdin fd leak of 2026-10-03 (`006fe28`) is the scar.
 - Gate (`kinestride/verify_render_leak.py`, like `verify_worker_fds.py`): render 10,000 frames,
   sample host RSS, open fds and the process's VRAM (sysfs) at frames 100 and 10,000. They must be equal.
 
@@ -96,7 +96,7 @@ after the K-step launch and writes the camera eye and target from the engine's o
 `follow_camera.fit_distance`, the formula the host `fit_camera` uses. `hud` draws the three bars of animal 0 over the shaded image
 from four float32 rows (energy, health, stamina, dead; `smooth.mojo` OGAME layout once the game hook is on); HUD pixels carry alpha
 254, alpha 255 stays "animal" for the stand and framing gates. Flags off compile none of it: the frame of the starting state is
-byte-equal to the pre-hook `live.mojo` (5faa668). Gate `check.sh spectate` (`spectate_check.py`): hooks off byte-equal; 300-frame clip of
+byte-equal to the pre-hook `live.mojo` (2b229e0). Gate `check.sh spectate` (`spectate_check.py`): hooks off byte-equal; 300-frame clip of
 the merged spider walker (`BRAIN=2`, 640 x 360, K=10) framed without clipping and centred in all 300 frames, root travel 6.5 mm;
 HUD bar fills 90/30/60 px of 120 for 0.75/0.25/0.5 and grey when dead; frame cost split and leak (fds 8/8, VRAM 147,792 to 145,744 KiB,
 RSS +64 KiB over frames 100 and 10,000) in `spectator_integration_check.py`. Mutants: camera target +30 mm, HUD fill one pixel

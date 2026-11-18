@@ -142,12 +142,12 @@ eyes.mojo, spider_eyes.py   spider eyes (`live.mojo -DEYES=1`): per-animal eye c
 
 ## Live view gotchas
 
-- `spectate_check.build` names binaries by a hash of every engine `*.mojo` plus `sizes.txt`/`rsizes.txt` (efbfc0c): before, a re-export with other sizes reused the old binary, which exited 1 with no message at the first ctrl.
+- `spectate_check.build` names binaries by a hash of every engine `*.mojo` plus `sizes.txt`/`rsizes.txt` (a2de1e8): before, a re-export with other sizes reused the old binary, which exited 1 with no message at the first ctrl.
 
-- `spectate_check.build` names binaries by a hash of every engine `*.mojo` plus `sizes.txt`/`rsizes.txt` (efbfc0c): before, a re-export with other sizes reused the old binary, which exited 1 with no message at the first ctrl.
+- `spectate_check.build` names binaries by a hash of every engine `*.mojo` plus `sizes.txt`/`rsizes.txt` (a2de1e8): before, a re-export with other sizes reused the old binary, which exited 1 with no message at the first ctrl.
 - The fly MJCF ships `noslip_iterations="5"`; with it MuJoCo itself trembles (root |qvel| 1.09 vs 0.025 with 0). The live
   view exports noslip 0 but takes its standing pose from the shipped noslip-5 model: with noslip 0 the settling rollout
-  lays the fly on its belly, and a lying fly passes a stillness gate (`74485d5`). `check.sh` parity keeps noslip 5.
+  lays the fly on its belly, and a lying fly passes a stillness gate (`aa82754`). `check.sh` parity keeps noslip 5.
 - On terrain the start pose is lifted 0.05 mm above the highest ground under the animal's own bodies; the old "highest
   ground within 4 mm" dropped the fly 0.57 mm on a 0.1 ramp, and it slid 0.7 mm and lay down, in MuJoCo too.
 - `live.py upright` clearance must exceed half the flat value and 0.2 mm, so a flat run that itself lies down fails.

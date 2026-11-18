@@ -34,7 +34,7 @@ check.sh STAGE:      fly + spider test body + a planted mutant (~/iTools/bin/mut
 
 A new species is a new MJCF file and an export, not new engine code. Refused at export (not ported):
 simple dofs; tendon limits are ported (check.sh tendon_limit); tendon equalities are ported (check.sh tendon_eq); runtime eq_active, inactive-at-start equalities included, is ported (check.sh eqact_runtime); the sleep filter is ported for one tree per animal (check.sh sleep); the flight model's own body-body contacts are ported (check.sh flight_contacts: automatic pairs, primitive narrowphase, condim 1). Equality constraints (connect, weld, joint), mocap
-bodies, gravcomp and spatial tendons are ported (lane-constr units 1 to 4, `f8352c5`, `97380ea`, 7d505fc; unit 5, full implicit + midpoint, `c096364`): `check.sh gravcomp`, `check.sh equality | equality_contact | mocap`, fixtures
+bodies, gravcomp and spatial tendons are ported (lane-constr units 1 to 4, `b9e7e5a`, `4c3eab4`, 9e96872; unit 5, full implicit + midpoint, `4450a20`): `check.sh gravcomp`, `check.sh equality | equality_contact | mocap`, fixtures
 `kinestride/models/eq_*.xml`.
 
 ## Stages
@@ -42,20 +42,20 @@ bodies, gravcomp and spatial tendons are ported (lane-constr units 1 to 4, `f835
 | Stage | MuJoCo 3.9.0 function | Status | Fly max err | Spider max err | Mutant |
 |---|---|---|---:|---:|---|
 | S0 spike | toy: rigid thorax, 6 kinematic legs, soft feet | speed PASS, stability FAIL | | | |
-| S1.1 | mj_kinematics (bodies, inertial frames, geoms, anchors, axes) | PASS `ccd9695` | 7.6e-07 | 7.9e-07 | hinge sign, caught |
-| S1.2 | mj_comPos + mj_crb (subtree CoM, cinert, cdof, crb, sparse M) | PASS `019783a` | 1.3e-06 | 9.4e-07 | hinge lever arm, caught |
-| S1.3 | mj_factorM | PASS `83469eb` | 3.0e-06 | 1.7e-06 | elimination sign, caught |
-| S1.4 | mj_comVel, mj_passive, mj_rne (qfrc_bias) | PASS `fc0abdb` | 3.2e-07 | 6.8e-07 | gyroscopic sign, caught |
-| S1.5 | mj_Euler, implicit dof damping (qH, qacc, qpos) | PASS `fc0abdb` | 3.6e-06 | 2.0e-06 | body w as world w, caught |
+| S1.1 | mj_kinematics (bodies, inertial frames, geoms, anchors, axes) | PASS `ed60339` | 7.6e-07 | 7.9e-07 | hinge sign, caught |
+| S1.2 | mj_comPos + mj_crb (subtree CoM, cinert, cdof, crb, sparse M) | PASS `20e8b51` | 1.3e-06 | 9.4e-07 | hinge lever arm, caught |
+| S1.3 | mj_factorM | PASS `798bc33` | 3.0e-06 | 1.7e-06 | elimination sign, caught |
+| S1.4 | mj_comVel, mj_passive, mj_rne (qfrc_bias) | PASS `8b87dbc` | 3.2e-07 | 6.8e-07 | gyroscopic sign, caught |
+| S1.5 | mj_Euler, implicit dof damping (qH, qacc, qpos) | PASS `8b87dbc` | 3.6e-06 | 2.0e-06 | body w as world w, caught |
 | S1 gate | full contact-free step at 65,536 animals | PASS: 0.23 us per step (gate 20) | | | |
-| S2 probe | plane-mesh feet (6 pairs), pyramidal cone, mj_solPrimal Newton, step | PASS `01c4c57`: 2.0 us per step (gate 14) | qacc 3.0e-06, qfrc_constraint 4.0e-05 * | | contact spring sign, caught |
+| S2 probe | plane-mesh feet (6 pairs), pyramidal cone, mj_solPrimal Newton, step | PASS `53828de`: 2.0 us per step (gate 14) | qacc 3.0e-06, qfrc_constraint 4.0e-05 * | | contact spring sign, caught |
 | S2 | noslip, all contact pairs (broadphase), warm start | | | | |
-| S3 | mj_transmission + mj_fwdActuation: 44 joint servos, 6 adhesion bodies | PASS `dd2f42c`: 0.64 us per step at 65,536 | qacc 4.0e-06, actuator_force 7.0e-08 | | servo bias dropped, caught |
-| Floor | all 55 plane-mesh pairs (every part on the floor) | PASS `00a58e6` | qfrc_constraint 1.9e-04 (float32-floor bar 2.1e-04) | | | feet-only sank through the floor in MuJoCo too |
-| Loop | K steps per launch, state kept on the card | PASS `c5c478c` | K=1 qvel 4.8e-06 | | qvel write-back dropped | K=10 byte-equal to 10 x K=1 |
-| Origin | floating origin per animal (root-relative step) | PASS `a03e700` | cube cinert 2.3e-07 (was 1.01e-05) | | | needed for worlds 20-40 mm across |
-| Cube | 40 mm cube of 6 planes, 330 pairs, states on every face | PASS `5acde4e` | 25 fields within bars | spider body PASS | bounding-sphere skip sign | hulls shared: 2.90 -> 0.54 MB |
-| Spider | generated salticid body (`models/spider.py`) | PARTIAL `615d2af` | | kinematics..step PASS; contact/actuated qfrc_constraint 1.5e-05..5.2e-05 | | qacc passes 6.5e-06; cause open |
+| S3 | mj_transmission + mj_fwdActuation: 44 joint servos, 6 adhesion bodies | PASS `7e66ef6`: 0.64 us per step at 65,536 | qacc 4.0e-06, actuator_force 7.0e-08 | | servo bias dropped, caught |
+| Floor | all 55 plane-mesh pairs (every part on the floor) | PASS `3f1b1d5` | qfrc_constraint 1.9e-04 (float32-floor bar 2.1e-04) | | | feet-only sank through the floor in MuJoCo too |
+| Loop | K steps per launch, state kept on the card | PASS `8e5654f` | K=1 qvel 4.8e-06 | | qvel write-back dropped | K=10 byte-equal to 10 x K=1 |
+| Origin | floating origin per animal (root-relative step) | PASS `670866c` | cube cinert 2.3e-07 (was 1.01e-05) | | | needed for worlds 20-40 mm across |
+| Cube | 40 mm cube of 6 planes, 330 pairs, states on every face | PASS `e1731b9` | 25 fields within bars | spider body PASS | bounding-sphere skip sign | hulls shared: 2.90 -> 0.54 MB |
+| Spider | generated salticid body (`models/spider.py`) | PARTIAL `bbe2934` | | kinematics..step PASS; contact/actuated qfrc_constraint 1.5e-05..5.2e-05 | | qacc passes 6.5e-06; cause open |
 | S6+ equality | mj_instantiateEquality, mj_diagApprox/makeImpedance/referenceConstraint, mj_Jdotv (engine_core_constraint.c:513,1637,2069,3048,973) | PASS (`equality`, `equality_contact`; qacc_euler bar lifted to 1e-4, measured 4.6e-5) | qfrc_constraint 4.9e-6, qacc 1.2e-6 | n/a (no spider equality body) | 5: anchor sign, weld conjugate, joint polynomial sign, Jdot v sign, aref dropped |
 | S0+ mocap | mj_kinematics mocap branch (engine_core_smooth.c:86) | PASS (`mocap`) | qfrc_constraint 4.5e-7, qacc 7.4e-7 | n/a | 2: mocap index, quaternion order |
 | S4+ gravcomp | mj_gravcomp, mj_passive hand-off, actuator-level gravcomp in mj_fwdActuation (engine_passive.c:817,1012; engine_forward.c:770) | PASS (`gravcomp`: fly, spider, `gravcomp_act.xml` for nu > 0 routing) | qfrc_passive 1.4e-7, qfrc_bias 2.9e-7 | qfrc_passive 2.7e-7, qfrc_bias 6.5e-7 | 4: gravcomp skipped, sign flipped, actuator route dropped, actuatorgravcomp ignored |
@@ -82,10 +82,10 @@ servos, one to five feet down), not random poses.
 | S1.2 kinematics + comPos + crb, per launch | 2.36 ms | 3.84 ms | 6.37 ms (97 ns per animal) |
 | S1 full contact-free step (S1.1-S1.5), per launch | 3.55 ms | 6.70 ms | 15.0 ms (0.23 us per animal) |
 | S2 probe: + foot contacts + Newton, per launch | 32.1 ms | 83.4 ms | 133 ms (2.03 us per animal) |
-| same, float32 stopping rules (`32d27c2`) | 18.6 ms | 31.4 ms | 61.9 ms (0.94 us per animal) |
+| same, float32 stopping rules (`bb9596c`) | 18.6 ms | 31.4 ms | 61.9 ms (0.94 us per animal) |
 | S3: + 44 servos + 6 adhesion, standing | 13.7 ms | 21.8 ms | 42.2 ms (0.64 us per animal, 22x CPU) |
-| floor 55 pairs, K-loop (`00a58e6`), 64 animals | 23.6 ms per step | | |
-| cube 330 pairs (`5acde4e`), 64 animals | 75-85 ms per step | | |
+| floor 55 pairs, K-loop (`3f1b1d5`), 64 animals | 23.6 ms per step | | |
+| cube 330 pairs (`e1731b9`), 64 animals | 75-85 ms per step | | |
 
 S0 to S1.2 ran on the Miner-125 LACT profile (1,400 MHz, -125 mV); the full step on Ultimate-AI.
 `kinestride/bench.sh` reproduces the last two rows (`bench.sh build MJCF 6`, then `run` under gpu-wait).

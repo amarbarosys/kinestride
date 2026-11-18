@@ -6,7 +6,7 @@ Kinestride came out of fly-connectome, a fly body simulation. The body engine wa
 
 Before this repo existed, the GPU track was checked on MuJoCo Warp. On 2026-10-02 that track was closed: MuJoCo Warp on gfx1100 reached correct physics but stayed below six CPU MuJoCo workers at 70,582 steps/s (`docs/ENGINE.md`, citing the Brain note `2026-10-03-gpu-body-port.md`). The engine port started from there.
 
-The baseline for the optimisation work was measured on 2026-10-03 at `01c4c57`, the S2 probe (`docs/ENGINE_OPT.md`). That commit is cited in the docs but is not among the first commits of this repo. The repo log begins at the root commit `7a119b3`, on 2026-10-09.
+The baseline for the optimisation work was measured on 2026-10-03 at `53828de`, the S2 probe (`docs/ENGINE_OPT.md`). That commit is cited in the docs but is not among the first commits of this repo. The repo log begins at the root commit `7a119b3`, on 2026-10-09.
 
 ## Repo start (2026-10-09)
 
@@ -50,9 +50,9 @@ Dates and hashes for v0.12.0 to v0.13.0 are from the release commits in `git log
 
 ## Engine stage milestones (from `docs/ENGINE.md`)
 
-- S1.1 to S1.5: kinematics, CoM and CRB, factorM, passive and RNE, Euler (`ccd9695`, `019783a`, `83469eb`, `fc0abdb`).
-- S2 probe: plane-mesh feet, Newton (`01c4c57`, 2.0 us per step).
-- S3: 44 joint servos, 6 adhesion bodies, 0.64 us per step at 65,536 (`dd2f42c`).
+- S1.1 to S1.5: kinematics, CoM and CRB, factorM, passive and RNE, Euler (`ed60339`, `20e8b51`, `798bc33`, `8b87dbc`).
+- S2 probe: plane-mesh feet, Newton (`53828de`, 2.0 us per step).
+- S3: 44 joint servos, 6 adhesion bodies, 0.64 us per step at 65,536 (`7e66ef6`).
 - Floor, Loop, Origin, Cube, Spider (partial), equality, mocap, gravcomp: see `docs/ENGINE.md` for commits.
 
 ## Still open

@@ -8,7 +8,7 @@ that keeps each animal in LDS moves about 600 B of state per step: 39 MB per lau
 61 TFLOPS. Small batches are the worst case today: 1,024 animals take 32 ms, slower than MuJoCo on the
 CPU, because 1,024 threads leave most of the 96 compute units idle.
 
-## Baseline (2026-10-03, Ultimate-AI, `01c4c57`)
+## Baseline (2026-10-03, Ultimate-AI, `53828de`)
 
 | batch | per launch | per animal-step | steps/s | vs MuJoCo CPU (70,582) |
 |---|---:|---:|---:|---:|
@@ -94,7 +94,7 @@ after this.
 
 ## Results
 
-**Step 0 (`32d27c2`).** Phase split at 65,536 animals, ms per launch: kinematics 1.4, comPos + crb 4.0,
+**Step 0 (`bb9596c`).** Phase split at 65,536 animals, ms per launch: kinematics 1.4, comPos + crb 4.0,
 factorM 2.9, rne/passive 2.1, collision + constraints 0.8, Newton 117.4, Euler 5.0. Newton took
 MuJoCo's iteration count (5.4) but MuJoCo's tolerances sit below float32 noise: every line search ran
 to its 50-evaluation cap (178 per animal), and a few animals ran all 100 Newton iterations, holding
@@ -129,7 +129,7 @@ about 34 KB of LDS per animal, ten times this probe, so a fully fused LDS step w
 large batches. Step 2 as written is dropped for large batches; the two batch regimes need different
 kernels.
 
-**Revision with S3 (`dd2f42c`).** The second stopping rule, stop when a full step keeps the active set,
+**Revision with S3 (`7e66ef6`).** The second stopping rule, stop when a full step keeps the active set,
 was wrong: with stiff contacts the Newton matrix is ill-conditioned (condition ~4e4), so one float32
 step is not exact, and the actuated check caught one state at 5.4e-05. Newton now stops when a step
 moves qacc by under 1e-6 of its size. Contact bench unchanged (65,536: 62 ms, at most 9 iterations).
@@ -139,7 +139,7 @@ With servos and adhesion the standing fly needs 2.4 iterations: 65,536 animals 4
 incremental Hessian updates, warm start from the previous step (K-step loop), Jacobian recomputed
 instead of stored, K steps per launch.
 
-**Newton breakdown (2026-10-05, stage 6, fly, WAVE=0).** Counters (`8f47bc5`): per animal-step 4.45 Newton
+**Newton breakdown (2026-10-05, stage 6, fly, WAVE=0).** Counters (`c6fb3f0`): per animal-step 4.45 Newton
 iterations, 15.2 line-search evaluations, 4.33 Hessian rebuilds, 6.3 of 172 contact slots active (65,536 animals).
 Timing probes (patch `.work/newton-hprobe.patch`, not kept): rebuilding the same H twice adds 27.7 ms for 3.33 extra
 rebuilds, so one rebuild = 8.3 ms and rebuilds = ~36 ms of the 88.8 ms step (40 %); assembling H twice, factoring
@@ -155,7 +155,7 @@ measured 89.74 vs 89.11 ms: lost, reverted. Next: cut factorI (20.6 ms/step) and
   buffer still does it.
 - Stale H (refactor only every Nth active-set change): never 389.6 ms (75.6 iterations, max 100), every 2nd 303.4 ms
   (17.8 iterations). Stiff contacts make an old H a bad Newton direction. Dead.
-Rank-1 update of the factor in place (`8a097d6`): 88.9 -> 70.6 ms at 65,536 (-20.6 %), rebuilds 4.33 -> 1.0. Smaller H pattern not worth it: all 77 fill entries come from the 7 grooming pairs (feet only: H = M pattern, 828), < 1 % after the rank-1 change.
+Rank-1 update of the factor in place (`bcf03c1`): 88.9 -> 70.6 ms at 65,536 (-20.6 %), rebuilds 4.33 -> 1.0. Smaller H pattern not worth it: all 77 fill entries come from the 7 grooming pairs (feet only: H = M pattern, 828), < 1 % after the rank-1 change.
 
 **Byte budget (2026-10-09, fly body-v2, stage 7, standing actuated states, WAVE=0).** Footprint (`-DLAYOUT=1`): 35,309
 float32 rows = 141 KB per animal, 9.3 GB at 65,536: noslip scratch 12,490 rows (35 %, OWC alone 9,356 = a second
