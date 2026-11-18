@@ -64,7 +64,7 @@ Per-launch numbers from the engine docs and optimisation baseline (`docs/ENGINE_
 | 16,384 | 83.4 ms | 5.09 us | 2.8x |
 | 65,536 | 133 ms | 2.03 us | 7.0x |
 
-Later: the S3 stage runs 0.64 us per animal-step at 65,536 (`dd2f42c`, `docs/ENGINE.md`). Step 0 of the optimisation plan cut the 1,024-animal launch from 32.1 ms to 18.6 ms (`32d27c2`). The 65,536 figure in `docs/ENGINE.md` is the current one; the 1,024 figure above is the baseline and has not been re-measured in the sources.
+Later: the S3 stage runs 0.64 us per animal-step at 65,536 (`dd2f42c`, `docs/ENGINE.md`). Step 0 of the optimisation plan cut the 1,024-animal launch from 32.1 ms to 18.6 ms (`32d27c2`). Re-measured 2026-11-18 at stage 7: 1,024 animals 22.3 ms per launch (0.65x MuJoCo), 16,384 38.6 ms (6.0x), 65,536 84.7 ms, 1.29 us per animal-step (11.0x); table in `docs/VS_MUJOCO.md`.
 
 The Godot crowd frame timings at 1k, 16k and 65k are in `a1f1cc3` (no numbers are copied here).
 

@@ -6,7 +6,15 @@ Where the engine is ahead of MuJoCo on the CPU, why, and where it is not. Figure
 
 **Batched GPU throughput.** The actuated fly, standing on six feet with 44 servos and 6 adhesion pads, runs at 0.64 us per animal-step for 65,536 animals (`dd2f42c`, `docs/ENGINE.md`). That is 22 times MuJoCo on six CPU workers (`docs/ENGINE.md`). The 22x follows from MuJoCo's 70,582 steps/s (`docs/ENGINE_OPT.md`): 65,536 animal-steps take about 928 ms on that CPU, against about 42 ms on the card. Equivalent rate: 1 / 0.64 us, about 1.56M animal-steps/s (derived from the same figure).
 
-**Small batches (open).** `docs/ENGINE.md` says the engine is ahead of MuJoCo "already at 1,024 animals". The optimisation baseline measured 0.45x at 1,024 (32.1 ms per launch, `01c4c57`). Step 0 brought that to 18.6 ms (`32d27c2`). MuJoCo at 70,582 steps/s needs about 14.5 ms for 1,024 animals, so 18.6 ms is still behind. The "ahead at 1,024" claim is not confirmed by a later measurement in the sources.
+**Measured 2026-11-18** (`kinestride/bench.sh run body.xml 7`, actuated fly, RX 7900 XTX, K=1; MuJoCo figure 70,582 steps/s on six CPU workers from 2026-10-02, not re-run):
+
+| animals | per launch | animal-steps/s | vs MuJoCo CPU |
+|---:|---:|---:|---:|
+| 1,024 | 22.3 ms | 45,972 | 0.65x |
+| 16,384 | 38.6 ms | 424,841 | 6.0x |
+| 65,536 | 84.7 ms | 773,606 | 11.0x |
+
+The 0.64 us / 22x figure above is from `dd2f42c`; today's build of the same stage measures 1.29 us at 65,536, so the current number is 11x. The engine is behind MuJoCo at 1,024 animals.
 
 **Determinism.** Two properties are measured:
 - K steps per launch match K single-step launches byte for byte: K=10 is byte-equal to 10 x K=1 (`c5c478c`, `docs/ENGINE.md`).
@@ -25,7 +33,7 @@ Where the engine is ahead of MuJoCo on the CPU, why, and where it is not. Figure
 ## Where it is not better, or not yet
 
 - **Hardware.** Only gfx1100 has been measured (`docs/ENGINE.md` measurements and `docs/ENGINE_OPT.md` use the card). Other GPUs are untested.
-- **Small batches.** See above: 1,024 animals is not confirmed as faster than MuJoCo on the CPU.
+- **Small batches.** See above: at 1,024 animals the engine runs 0.65x MuJoCo on the CPU; the crossover lies between 1,024 and 16,384 (not measured).
 - **Coverage.** Noslip and the contact pairs other than the feet are not ported (`docs/ENGINE.md`). The spider stage is partial (`615d2af`; qfrc_constraint 1.5e-05 to 5.2e-05, cause open).
 - **Flight model.** Its automatic body-body contacts need capsule, cylinder and sphere supports, which are missing (`docs/CONVEX_CONTACT.md`).
 - **Plane-capsule.** Not ported (`docs/MOTION.md`, Bones are convex meshes).

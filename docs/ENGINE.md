@@ -2,7 +2,9 @@
 
 A direct port of MuJoCo's own functions runs the actuated fly, standing on six feet with 44 joint
 servos and 6 adhesion pads, at 0.64 us per animal-step for 65,536 animals: 22 times MuJoCo on six CPU
-workers, and ahead of it already at 1,024 animals. Every field from kinematics to the step agrees with
+workers. Re-measured 2026-11-18 (`bench.sh run body.xml 7`, MuJoCo figure 70,582 steps/s from 2026-10-02, not re-run):
+1,024 animals 45,972 animal-steps/s (0.65x MuJoCo), 16,384 424,841 (6.0x), 65,536 773,606 (11.0x).
+Small batches are still slower than the CPU. Every field from kinematics to the step agrees with
 MuJoCo within 1e-5 of its scale (the contact force of the unactuated probe within 3 times its float32
 input floor), on the fly and, for the smooth stages, on an 8-leg spider test body, and a planted bug
 fails the gate at each stage. Not yet ported: noslip and the 496 contact pairs other than the feet.

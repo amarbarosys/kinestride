@@ -55,8 +55,9 @@ with `-I /path/to/kinestride/kinestride` (`import smooth`, `import render`, `imp
 | figure | value | source |
 |---|---|---|
 | 65,536 bodies, full step, one launch | 66.7 ms | `docs/releases/v0.13.0.md` |
-| 65,536 bodies, actuated fly (6 feet, 44 servos, 6 adhesion pads) | 0.64 us per body-step | `docs/ENGINE.md` |
-| same workload, MuJoCo on six CPU workers | 22 times slower | `docs/ENGINE.md` |
+| 65,536 bodies, actuated fly (6 feet, 44 servos, 6 adhesion pads) | 1.29 us per body-step, 11.0x MuJoCo on six CPU workers | `docs/VS_MUJOCO.md` (2026-11-18) |
+| 16,384 bodies, same | 6.0x MuJoCo | `docs/VS_MUJOCO.md` |
+| 1,024 bodies, same | 0.65x MuJoCo (CPU wins) | `docs/VS_MUJOCO.md` |
 
 The optimisation history, with the byte budget and the rejected steps, is in `docs/ENGINE_OPT.md`.
 
