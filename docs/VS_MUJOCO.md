@@ -14,7 +14,7 @@ Where the engine is ahead of MuJoCo on the CPU, why, and where it is not. Figure
 | 16,384 | 38.6 ms | 424,841 | 6.0x |
 | 65,536 | 84.7 ms | 773,606 | 11.0x |
 
-The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 now measures 1.29 us at 65,536, the same at kinestride's first commit `e788c9b` (85.2 ms vs 84.7 ms per launch), so the current number is 11x. Likely cause, not bisected: all 55 plane-mesh floor pairs (`00a58e6`) replaced the 6 foot pairs. The engine is behind MuJoCo at 1,024 animals.
+The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 now measures 1.29 us at 65,536, the same at kinestride's first commit `7a119b3` (85.2 ms vs 84.7 ms per launch), so the current number is 11x. Likely cause, not bisected: all 55 plane-mesh floor pairs (`00a58e6`) replaced the 6 foot pairs. The engine is behind MuJoCo at 1,024 animals.
 
 **Determinism.** Two properties are measured:
 - K steps per launch match K single-step launches byte for byte: K=10 is byte-equal to 10 x K=1 (`c5c478c`, `docs/ENGINE.md`).
@@ -22,9 +22,9 @@ The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 n
 
 **Every rule is ours to change.** MuJoCo's functions are ported, so joints, adhesion and new species are engine code and not a MuJoCo option (`docs/ENGINE.md`, Why a port). A new species is a new MJCF file and an export, not new engine code (`docs/ENGINE.md`, Design).
 
-**Brain and body in one process.** npc-mind brains and the world run in one shared C library (`e682e31`), with crowd scenes in Godot (`c3eef4b`). Crowd frame timings at 1k, 16k and 65k are in `a1f1cc3` (no numbers are copied here).
+**Brain and body in one process.** npc-mind brains and the world run in one shared C library (`02767ec`), with crowd scenes in Godot (`5eeaef1`). Crowd frame timings at 1k, 16k and 65k are in `2884ab4` (no numbers are copied here).
 
-**Written in Mojo.** The engine and its checks are Mojo, built with Mojo 1.2.0 and MAX 26.7.0 (`a6aff17`). The Python side is the export and the MuJoCo oracle only (`docs/API.md`).
+**Written in Mojo.** The engine and its checks are Mojo, built with Mojo 1.2.0 and MAX 26.7.0 (`6443f95`). The Python side is the export and the MuJoCo oracle only (`docs/API.md`).
 
 **Motion pipeline.** Retarget runs at 2.8M to 3.65M frames/s, against 23.8k to 25.1k skeletons/s for Godot 4.7.2's RetargetModifier3D on the same machine (`docs/MOTION.md`). Tracking matches MuJoCo's own run of the same loop to 1.2e-7 m (`docs/MOTION.md`).
 
@@ -47,4 +47,4 @@ The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 n
 - **Checks need local tools.** `check.sh` calls mojo-cached, mutant-check, mj-oracle and gpu-wait, which are not shipped in this repo (`docs/ENGINE.md`, Stages; `docs/HFIELD_CONTACT.md`, Verification).
 - **Test data.** CMU clips are not in git and come from `tools/assets.sh` (`docs/MOTION.md`).
 
-> Commits before `e788c9b` (2026-10-09) are in the fly-connectome repo, where the engine started; kinestride history begins at `e788c9b`.
+> Commits before `7a119b3` (2026-10-09) are in the fly-connectome repo, where the engine started; kinestride history begins at `7a119b3`.

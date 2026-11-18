@@ -27,7 +27,7 @@ Each model becomes two tables (`mi.bin`, `mf.bin`) and its own binary. Export re
 | Origin | floating origin per animal | PASS, `a03e700` |
 | Cube | 40 mm cube of 6 planes, 330 pairs | PASS, `5acde4e` |
 | Spider | generated salticid body | PARTIAL, `615d2af` (contact/actuated qfrc_constraint 1.5e-05 to 5.2e-05; cause open) |
-| Equality | connect, weld, joint, tendon equalities, runtime `eq_active` | PASS, `equality`, `equality_contact` (see `docs/ENGINE.md`; `3b67c67`, `ca9c0b9`) |
+| Equality | connect, weld, joint, tendon equalities, runtime `eq_active` | PASS, `equality`, `equality_contact` (see `docs/ENGINE.md`; `9d593b6`, `e7260c2`) |
 | Mocap | mocap bodies | PASS, `mocap` (`docs/ENGINE.md`) |
 | Gravcomp | `mj_gravcomp`, actuator-level gravcomp | PASS, `gravcomp` (`docs/ENGINE.md`) |
 | Spatial tendons | `mj_tendon`, `mju_wrap` | `docs/ENGINE.md` stage table |
@@ -37,21 +37,21 @@ Tolerances: each field is checked against MuJoCo within 1e-5 of its scale; where
 ## Solvers
 
 - Newton with the MuJoCo iteration count (S2 probe, `01c4c57`). The float32 stopping rules that cut line-search cost are in `docs/ENGINE_OPT.md` (Step 0, `32d27c2`).
-- PGS over equality, friction-loss, limit, elliptic and convex rows, with islands across trees (`cdb3c92`).
-- CG over the same rows (`d4d61a2`).
-- Elliptic cone under RK4 and implicitfast (`13ab72f`).
-- Torsional and rolling friction, condim 4 and 6, pyramidal and elliptic (`df46fbc`).
-- Dof and tendon friction-loss rows, Huber cost in Newton (`53e6000`, `acf6154`).
-- Direct solref on equality and joint/tendon limit rows (`a5912f3`). Joint actuator force limits (`5488855`).
+- PGS over equality, friction-loss, limit, elliptic and convex rows, with islands across trees (`2e87a24`).
+- CG over the same rows (`eafad87`).
+- Elliptic cone under RK4 and implicitfast (`3a897e3`).
+- Torsional and rolling friction, condim 4 and 6, pyramidal and elliptic (`612ff59`).
+- Dof and tendon friction-loss rows, Huber cost in Newton (`b631139`, `9a94224`).
+- Direct solref on equality and joint/tendon limit rows (`c1e6cdf`). Joint actuator force limits (`5686d69`).
 
 ## Contacts
 
 - Plane-mesh feet (S2 probe, `01c4c57`).
-- Margin-0 box-mesh and mesh-mesh contacts by MuJoCo's polygon clipping (`0548782`). Mesh-mesh through `mjc_Convex` (`22643a5`).
+- Margin-0 box-mesh and mesh-mesh contacts by MuJoCo's polygon clipping (`2f552a2`). Mesh-mesh through `mjc_Convex` (`05d8954`).
 - Box-mesh and ellipsoid-mesh through the native GJK and EPA, with the perturbation search for 0, 1 or 5 contacts (`docs/CONVEX_CONTACT.md`).
 - Exact heightfield contact, one GJK and EPA per cell prism, up to 50 contacts per pair (`docs/CONVEX_CONTACT.md`). A tangent-plane approximation was planned first (`docs/HFIELD_CONTACT.md`); the exact path is the one the convex doc records as measured.
-- Contact pairs across two trees in one model (`4fcfec8`) and between two articulated animals (`7f705b5`).
-- Contact list out for audio or game hooks (`-DCLIST=k`, `5234636`; `docs/API.md`).
+- Contact pairs across two trees in one model (`9016296`) and between two articulated animals (`76873dc`).
+- Contact list out for audio or game hooks (`-DCLIST=k`, `b26adc4`; `docs/API.md`).
 - Not ported: plane-capsule, and the flight model's automatic body-body contacts (capsule, cylinder, sphere supports are missing; `docs/CONVEX_CONTACT.md`). Noslip and the contact pairs other than the feet are still open (`docs/ENGINE.md`).
 
 ## Batch sizes and throughput
@@ -66,41 +66,41 @@ Per-launch numbers from the engine docs and optimisation baseline (`docs/ENGINE_
 
 Later: the S3 stage runs 0.64 us per animal-step at 65,536 (`dd2f42c`, `docs/ENGINE.md`). Step 0 of the optimisation plan cut the 1,024-animal launch from 32.1 ms to 18.6 ms (`32d27c2`). Re-measured 2026-11-18 at stage 7: 1,024 animals 22.3 ms per launch (0.65x MuJoCo), 16,384 38.6 ms (6.0x), 65,536 84.7 ms, 1.29 us per animal-step (11.0x); table in `docs/VS_MUJOCO.md`.
 
-The Godot crowd frame timings at 1k, 16k and 65k are in `a1f1cc3` (no numbers are copied here).
+The Godot crowd frame timings at 1k, 16k and 65k are in `2884ab4` (no numbers are copied here).
 
 ## Motion and tracking
 
 - Any BVH skeleton is retargeted onto one 21-body, 70 kg character, with spike repair and limb planting (`docs/MOTION.md`).
 - Tracking matches MuJoCo's own run of the same loop to 1.2e-7 m mean body position over 800 frames, 64 animals (`check.sh track`, `docs/MOTION.md`).
-- Dataset driver: every animal its own clip, push and fall (`e07afc5`, `docs/MOTION.md`).
+- Dataset driver: every animal its own clip, push and fall (`382f1b0`, `docs/MOTION.md`).
 - Retarget measured at 2.8M to 3.65M frames/s, against 23.8k to 25.1k skeletons/s in Godot 4.7.2 on the same machine (`docs/MOTION.md`).
 
 ## Muscles
 
-A compact excitation-driven muscle model on the fixed-tendon path: activation and fatigue with exact exponential integration, bounded force curves, MJCF annotation `muscle_<actuator>` (`docs/MUSCLE.md`, `1876173`, `1b10bf6`). It is not MuJoCo's gain/bias/dyntype model. Game stamina drains from muscle work (`b7d24bf`).
+A compact excitation-driven muscle model on the fixed-tendon path: activation and fatigue with exact exponential integration, bounded force curves, MJCF annotation `muscle_<actuator>` (`docs/MUSCLE.md`, `a2b9851`, `98d4f63`). It is not MuJoCo's gain/bias/dyntype model. Game stamina drains from muscle work (`77cc7f2`).
 
 ## Checks
 
 - `check.sh STAGE` per stage, with a planted mutant that must fail. Mutants caught are listed per stage in `docs/ENGINE.md`.
 - `check.sh convex`, `hfield`, `arena`, `terrain_exact`, `convexstep`, each with mutants (`docs/CONVEX_CONTACT.md`).
 - `check.sh bvh` (14 planted bugs, each caught), `motion`, `track`, `dataset`, `clist`, `gravcomp`, `equality`, `mocap` (`docs/MOTION.md`, `docs/API.md`).
-- `check_all` builds every mutant on the CPU first (`fead62e`).
-- `smoke.sh`, a CPU check a fresh checkout can run (`1a2f5b3`).
+- `check_all` builds every mutant on the CPU first (`5c8a4e6`).
+- `smoke.sh`, a CPU check a fresh checkout can run (`bf489e6`).
 
 ## Rendering and live loop
 
-- Renderer draws the engine's poses (`docs/RENDERER.md`). Sun shadows, SSAO, AgX tone mapping and bloom are in the commit log (`385de27`, `b4a185f`, `2117e26`).
-- Live loop: `viewer.Viewer` with the app's own controller (`docs/API.md`, `8dff5a6`).
-- Window and UI: SDL3 window, FreeType glyph atlas, immediate-mode UI on the GPU (`bea8dfe`, `73ee055`, `fc74f14`).
+- Renderer draws the engine's poses (`docs/RENDERER.md`). Sun shadows, SSAO, AgX tone mapping and bloom are in the commit log (`ccfb09d`, `05d77fe`, `08c1853`).
+- Live loop: `viewer.Viewer` with the app's own controller (`docs/API.md`, `c657634`).
+- Window and UI: SDL3 window, FreeType glyph atlas, immediate-mode UI on the GPU (`6066ba9`, `9e146f9`, `c6b53a6`).
 
 ## Integrations
 
-- Godot: a C ABI over the engine (create, step, poses, ctrl, `c6b7f4d`), a GPU launch from inside Godot (`dbea402`), KinestrideWorld and NpcMind classes (`7373a16`), MultiMesh transforms (`2853ec8`), npc-mind brains as a C shared library (`e682e31`), crowd and NPC scenes (`c3eef4b`).
-- Blender: `.blend` load through a cached export (`1addcc3`), a 14-body humanoid saved as `.blend` (`984c2d5`).
-- npc-mind NPCs walk as spider bodies (`86573e2`).
+- Godot: a C ABI over the engine (create, step, poses, ctrl, `c7af891`), a GPU launch from inside Godot (`fb579b8`), KinestrideWorld and NpcMind classes (`d31eddd`), MultiMesh transforms (`9229756`), npc-mind brains as a C shared library (`02767ec`), crowd and NPC scenes (`5eeaef1`).
+- Blender: `.blend` load through a cached export (`49c8cc0`), a 14-body humanoid saved as `.blend` (`6050930`).
+- npc-mind NPCs walk as spider bodies (`e465f99`).
 
 ## Platform
 
-Tested on gfx1100 (RDNA3) only so far. Build: Mojo 1.2.0, MAX 26.7.0 (`a6aff17`).
+Tested on gfx1100 (RDNA3) only so far. Build: Mojo 1.2.0, MAX 26.7.0 (`6443f95`).
 
-> Commits before `e788c9b` (2026-10-09) are in the fly-connectome repo, where the engine started; kinestride history begins at `e788c9b`.
+> Commits before `7a119b3` (2026-10-09) are in the fly-connectome repo, where the engine started; kinestride history begins at `7a119b3`.
