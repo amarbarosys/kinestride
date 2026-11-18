@@ -1,12 +1,12 @@
 # Kinestride
 
-65,536 articulated bodies, each with 74 degrees of freedom, contacts and 50 actuators, step together in 66.7 ms
+65,536 articulated bodies, each with 74 degrees of freedom, contacts and 50 actuators, step together in 84.7 ms
 on one AMD RX 7900 XTX. Kinestride is batched GPU physics in Mojo: one GPU thread per body, any MuJoCo MJCF model
 as input, and every stage checked against MuJoCo 3.9.0 with a planted bug that the check must catch.
 
 ## What it is
 
-- **Batched.** One GPU thread per body. A launch steps the whole crowd: 66.7 ms at 65,536 bodies
+- **Batched.** One GPU thread per body. A launch steps the whole crowd: 84.7 ms at 65,536 bodies
   (`docs/releases/v0.13.0.md`).
 - **Any MJCF model.** `kinestride/model.py export` flattens a MuJoCo model into two tables (`mi.bin` int32,
   `mf.bin` float32). The sizes become compile-time constants, so each body compiles a kernel shaped for it.
@@ -54,7 +54,7 @@ with `-I /path/to/kinestride/kinestride` (`import smooth`, `import render`, `imp
 
 | figure | value | source |
 |---|---|---|
-| 65,536 bodies, full step, one launch | 66.7 ms | `docs/releases/v0.13.0.md` |
+| 65,536 bodies, full step, one launch | 84.7 ms (stage 7, 2026-11-18) | `docs/VS_MUJOCO.md` |
 | 65,536 bodies, actuated fly (6 feet, 44 servos, 6 adhesion pads) | 1.29 us per body-step, 11.0x MuJoCo on six CPU workers | `docs/VS_MUJOCO.md` (2026-11-18) |
 | 16,384 bodies, same | 6.0x MuJoCo | `docs/VS_MUJOCO.md` |
 | 1,024 bodies, same | 0.65x MuJoCo (CPU wins) | `docs/VS_MUJOCO.md` |
