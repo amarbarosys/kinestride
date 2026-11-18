@@ -10,9 +10,9 @@ S=${1:-$HOME/Projects/science/fly-connectome}; fail=0
 copy() { [ -e "$1" ] || { echo "FAIL asset $2: $1 missing"; fail=$((fail+1)); return; }; mkdir -p "$(dirname "$2")"; rm -rf "$2"; cp -r "$1" "$2"; echo "ok $2 ($(du -sh "$2" | cut -f1))"; }
 copy "$S/.work/agent/gpu-body-port/body-v2" .work/assets/fly
 # flight-body leaves out 26 of flight.xml's 85 meshes; flybody's own assets fill them, checked by the name's suffix (the content sha1)
-FL=$S/.work/flight-body; F=${FLYBODY:-.work/flybody/flybody/fruitfly/assets}
+FL=$S/.work/flight-body; [ -e .work/flight-body/flight.xml ] && FL=.work/flight-body; F=${FLYBODY:-.work/flybody/flybody/fruitfly/assets}
 if [ ! -e "$FL/flight.xml" ]; then
-  echo "SKIP flight: $FL/flight.xml missing (flight export not run, see fly-connectome README)"
+  echo "SKIP flight: $FL/flight.xml missing (run tools/fetch_flybody.sh, then tools/flight_export.py .work/flight-body with flybody installed)"
 elif [ ! -d "$F" ]; then
   echo "SKIP flight: flybody assets missing at $F (run tools/fetch_flybody.sh, or set FLYBODY=dir)"
 else
