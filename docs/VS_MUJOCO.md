@@ -14,7 +14,7 @@ Where the engine is ahead of MuJoCo on the CPU, why, and where it is not. Figure
 | 16,384 | 38.6 ms | 424,841 | 6.0x |
 | 65,536 | 84.7 ms | 773,606 | 11.0x |
 
-The 0.64 us / 22x figure above is from `dd2f42c`; today's build of the same stage measures 1.29 us at 65,536, so the current number is 11x. The engine is behind MuJoCo at 1,024 animals.
+The 0.64 us / 22x figure above is from `dd2f42c` (feet-only contacts); stage 7 now measures 1.29 us at 65,536, the same at kinestride's first commit `e788c9b` (85.2 ms vs 84.7 ms per launch), so the current number is 11x. Likely cause, not bisected: all 55 plane-mesh floor pairs (`00a58e6`) replaced the 6 foot pairs. The engine is behind MuJoCo at 1,024 animals.
 
 **Determinism.** Two properties are measured:
 - K steps per launch match K single-step launches byte for byte: K=10 is byte-equal to 10 x K=1 (`c5c478c`, `docs/ENGINE.md`).
