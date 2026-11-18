@@ -2,7 +2,7 @@
 
 Full notes in `docs/releases/`. Newest first. Format: private note `TEMPLATE`.
 
-- [v0.14.0](docs/releases/v0.14.0.md) (2026-11-18): TODO one-line summary
+- [v0.14.0](docs/releases/v0.14.0.md) (2026-11-18): first public release: runs from a fresh clone without private tooling, speed vs MuJoCo re-measured, Godot GDExtension, direct .blend loading
 - [v0.13.0](docs/releases/v0.13.0.md) (2026-10-26): npc-mind brains drive spider bodies in its world (check.sh npclive); 184 MB per world
 - [v0.12.1](docs/releases/v0.12.1.md) (2026-10-26): muscle GPU builds no longer overrun host memory; a 65,536-body run needs 1.99 GB host RAM instead of 9.27 GB
 - [v0.12.0](docs/releases/v0.12.0.md) (2026-10-23): thirteen former MuJoCo refusals ported and gated (friction loss, condim 4/6, PGS/CG over every row, margin-0 mesh-mesh, ...); living-world renderer; muscle engine; streamed heightfield
