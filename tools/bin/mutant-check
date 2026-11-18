@@ -29,6 +29,7 @@ echo "helper: $(sha256sum "$0" | cut -c1-12)"
 if "$@" >"$log" 2>&1; then echo "FAIL mutant-check: the gate PASSED with the bug planted"; exit 1; fi
 why=$(grep -E 'FAIL|Error|error:|Traceback' "$log" | tail -n 1 | cut -c1-200)
 echo "gate said: ${why:-<no FAIL line; exit non-zero>}"
+if grep -qE "Error opening file|No such file or directory|ModuleNotFoundError|command not found" "$log"; then echo "FAIL mutant-check: the gate broke on a missing input, not on the mutant"; exit 1; fi
 if [ -n "${MUTANT_EXPECT:-}" ] && ! grep -qE "$MUTANT_EXPECT" "$log"; then
   echo "FAIL mutant-check: the gate failed, but not with MUTANT_EXPECT '$MUTANT_EXPECT' (another cause)"; exit 1
 fi

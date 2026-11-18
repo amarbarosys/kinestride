@@ -1183,7 +1183,7 @@ else
 fi
 if [ "$stage" = kinematics ]; then  # the gate must fail with the hinge angle's sign flipped
   tools/bin/mutant-check kinestride/smooth.mojo 's/var h = 0.5 \* (qpos/var h = -0.5 * (qpos/' -- \
-    $M -m kinestride.model check .work/assets/fly/body.xml $X/mutant kinematics 64 || fail=$((fail+1))
+    $M -m kinestride.model check ${BODY:-.work/assets/fly/body.xml} $X/mutant kinematics 64 || fail=$((fail+1))
 fi
 if [ "$stage" = crb ]; then  # the gate must fail with the hinge cdof lever arm reversed (anchor - com)
   tools/bin/mutant-check kinestride/smooth.mojo 's/var off = com - anchor/var off = anchor - com/' -- \
